@@ -32,6 +32,11 @@ class Config:
     # Piper
     piper_voz: Path
 
+    # Silero VAD: fim da fala sem listen_stop
+    vad_limiar: float
+    vad_silencio_s: float  # silêncio que encerra a fala
+    vad_sem_fala_s: float  # escuta sem nenhuma fala que volta a ocioso
+
     # Servidor WebSocket
     api_host: str
     api_porta: int
@@ -68,6 +73,9 @@ def carregar_config(ambiente: dict[str, str] | None = None) -> Config:
         piper_voz=Path(
             env.get("PEGASUS_PIPER_VOZ", str(MODELOS / "piper" / "pt_BR-faber-medium.onnx"))
         ),
+        vad_limiar=float(env.get("PEGASUS_VAD_LIMIAR", "0.5")),
+        vad_silencio_s=int(env.get("PEGASUS_VAD_SILENCIO_MS", "600")) / 1000,
+        vad_sem_fala_s=int(env.get("PEGASUS_VAD_SEM_FALA_MS", "8000")) / 1000,
         api_host=env.get("PEGASUS_HOST", "127.0.0.1"),
         api_porta=int(env.get("PEGASUS_PORTA_API", "8100")),
         tokens=frozenset(t.strip() for t in env.get("PEGASUS_TOKENS", "").split(",") if t.strip()),
@@ -84,6 +92,7 @@ def resumo_publico(config: Config) -> dict[str, object]:
         "llm_modelo": config.llm_modelo or "(primeiro de /v1/models)",
         "api": f"{config.api_host}:{config.api_porta}",
         "voz": config.piper_voz.stem,
+        "vad_silencio_ms": round(config.vad_silencio_s * 1000),
         "whisper": f"{config.whisper_modelo}, {whisper}, {config.whisper_precisao}",
     }
     if config.emocao_modo == "paralelo":
