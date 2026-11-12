@@ -4,6 +4,8 @@ import 'dart:typed_data';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_pcm_sound/flutter_pcm_sound.dart';
 
+import 'volume.dart';
+
 /// Toca em fluxo o PCM 16 bits mono que chega do servidor.
 ///
 /// O servidor manda cada frase mais depressa do que ela toca, então o áudio
@@ -15,6 +17,13 @@ class Reproducao {
   bool _ociosoNativo = true;
   int? _byteSolto; // metade de amostra que chegou num bloco ímpar
 
+  /// Relógio monotônico do agendamento do volume.
+  final _relogio = Stopwatch()..start();
+  final _envelope = EnvelopeVoz();
+
+  /// Quando termina de tocar o que já foi entregue ao tocador nativo.
+  Duration _fimAgendado = Duration.zero;
+
   /// Verdadeiro enquanto há áudio tocando ou esperando na fila.
   final tocando = ValueNotifier<bool>(false);
 
@@ -24,6 +33,8 @@ class Reproducao {
     if (taxa == _taxa) return;
     descartar();
     if (_taxa != 0) await FlutterPcmSound.release();
+    _envelope.limpar();
+    _fimAgendado = Duration.zero;
     _taxa = taxa;
     await FlutterPcmSound.setLogLevel(LogLevel.error);
     await FlutterPcmSound.setup(sampleRate: taxa, channelCount: 1);
@@ -33,6 +44,10 @@ class Reproducao {
     FlutterPcmSound.setFeedCallback(_aoPedirMais);
     _ociosoNativo = true;
   }
+
+  /// Volume (RMS, 0 a 1) do que está saindo do alto-falante agora, com
+  /// ~50 ms de atraso para compensar a latência dele. Zero em silêncio.
+  double nivel() => _envelope.nivel(_relogio.elapsed);
 
   /// Põe um bloco de PCM na fila e começa a tocar se estava parado.
   void tocar(Uint8List pcm) {
@@ -69,6 +84,8 @@ class Reproducao {
   }
 
   void _aoPedirMais(int quadrosRestantes) {
+    // O tocador diz quanto ainda tem: corrige o relógio do agendamento.
+    _fimAgendado = _relogio.elapsed + _duracao(quadrosRestantes);
     if (_fila.isNotEmpty) {
       _alimentar();
     } else if (quadrosRestantes == 0) {
@@ -90,8 +107,15 @@ class Reproducao {
     // Cópia com buffer do tamanho exato: o plugin envia `bytes.buffer` inteiro
     // e ignoraria o deslocamento e o tamanho de uma view.
     final bytes = Uint8List.fromList(lote.takeBytes());
+    final agora = _relogio.elapsed;
+    final inicio = _fimAgendado > agora ? _fimAgendado : agora;
+    _envelope.agendar(bytes, _taxa, inicio);
+    _fimAgendado = inicio + _duracao(bytes.length ~/ 2);
     FlutterPcmSound.feed(PcmArrayInt16(bytes: bytes.buffer.asByteData()));
   }
+
+  Duration _duracao(int quadros) =>
+      Duration(microseconds: quadros * 1000000 ~/ _taxa);
 
   int _quadros(Duration d) => _taxa * d.inMilliseconds ~/ 1000;
 }

@@ -38,6 +38,9 @@ class Robo {
 
   Config get config => _config;
 
+  /// Volume da voz que está tocando (RMS, 0 a 1), para a boca do rosto.
+  double nivelVoz() => _reproducao.nivel();
+
   Future<void> iniciar() async {
     unawaited(WakelockPlus.enable());
     _cliente.conectado.addListener(_aoMudarConexao);
