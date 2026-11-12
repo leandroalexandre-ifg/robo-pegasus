@@ -4,6 +4,7 @@ import numpy as np
 
 from app.config import carregar_config
 from app.pipeline import llm, stt, tts, turno
+from app.pipeline.emocao import Emocao
 
 
 def _falsos(monkeypatch, transcricao, pedacos):
@@ -59,3 +60,16 @@ def test_sem_fala_nao_responde(monkeypatch):
     assert _rodar(t) == []
     assert sintetizadas == []
     assert list(t.tempos) == ["stt"]
+
+
+def test_emocao_passa_e_marcacoes_nao_chegam_a_voz(monkeypatch):
+    sintetizadas = _falsos(
+        monkeypatch, "ganhei!", [Emocao("feliz"), "[feliz] Que *pula* legal! ", "😄\n", "Parabéns."]
+    )
+    t = turno.Turno()
+    itens = _rodar(t)
+    assert itens[0] == Emocao("feliz")
+    assert [b.frase for b in itens[1:]] == ["Que legal!", "Parabéns."]
+    assert sintetizadas == ["Que legal!", "Parabéns."]
+    assert t.emocoes == ["feliz"]
+    assert t.tempos["emocao"] <= t.tempos["primeiro_audio"]

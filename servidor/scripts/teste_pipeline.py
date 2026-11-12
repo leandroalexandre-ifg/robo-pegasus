@@ -17,6 +17,7 @@ import openai
 
 from app.config import Config, carregar_config
 from app.pipeline import stt, tts
+from app.pipeline.emocao import Emocao
 from app.pipeline.turno import Turno, conversar
 from app.wav import TAXA_ENTRADA, escrever_wav, ler_wav
 
@@ -63,7 +64,8 @@ async def principal(
     blocos = []
     try:
         async for bloco in conversar(audio, config, turno):
-            blocos.append(bloco)
+            if not isinstance(bloco, Emocao):
+                blocos.append(bloco)
     except openai.APIConnectionError:
         print(f"O LLM não respondeu em {config.llm_url}. Ele está ligado (pegasus-ligar)?")
         return 2
@@ -73,6 +75,7 @@ async def principal(
         print("Nenhuma fala reconhecida; nada a responder.")
         return 1
     print(f"Resposta:    {turno.resposta}")
+    print(f"Emoção:      {', '.join(turno.emocoes) or '(nenhuma)'}")
 
     taxa = blocos[0].taxa
     pcm = b"".join(b.pcm for b in blocos)
@@ -86,6 +89,7 @@ async def principal(
     print(f"STT  (Whisper):          {ms(tempos['stt'])}")
     print(f"LLM  primeiro token:     {ms(tempos.get('llm_primeiro_token'))}")
     print(f"LLM  primeira frase:     {ms(tempos.get('llm_primeira_frase'))}")
+    print(f"Emoção:                  {ms(tempos.get('emocao'))}")
     print(f"Primeiro áudio:          {ms(tempos.get('primeiro_audio'))}   ← meta: 1500 ms")
     print(f"LLM  fim do fluxo:       {ms(tempos.get('llm_fim'))}")
     print(f"Fim (todo o áudio):      {ms(tempos.get('fim'))}")
@@ -100,7 +104,8 @@ async def principal(
     if json_saida:
         medidas = {k: round(v * 1000) for k, v in tempos.items()}
         medidas["tts_soma"] = round(turno.tts_s * 1000)
-        print("JSON " + json.dumps({"frases": len(blocos), "ms": medidas}, ensure_ascii=False))
+        resumo = {"frases": len(blocos), "emocoes": turno.emocoes, "ms": medidas}
+        print("JSON " + json.dumps(resumo, ensure_ascii=False))
     return 0
 
 

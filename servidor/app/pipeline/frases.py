@@ -9,10 +9,14 @@ _FIM = re.compile(r"[.!?…]+[\"')\]»]*\s+|\n+")
 _TEM_TEXTO = re.compile(r"\w")
 
 
-async def cortar_frases(pedacos: AsyncIterable[str]) -> AsyncIterator[str]:
-    """Recebe pedaços de texto em fluxo e devolve cada frase assim que ela termina."""
+async def cortar_frases[T](pedacos: AsyncIterable[str | T]) -> AsyncIterator[str | T]:
+    """Recebe pedaços de texto em fluxo e devolve cada frase assim que ela termina.
+    Itens que não são texto (emoções) passam adiante na hora, sem esperar a frase."""
     pendente = ""
     async for pedaco in pedacos:
+        if not isinstance(pedaco, str):
+            yield pedaco
+            continue
         pendente += pedaco
         while m := _FIM.search(pendente):
             frase, pendente = pendente[: m.end()].strip(), pendente[m.end() :]

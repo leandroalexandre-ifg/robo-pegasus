@@ -31,6 +31,7 @@ ssh -N -L 0.0.0.0:8000:localhost:8000 USUARIO@SERVIDOR_NUMBERS
 - Modelos em `modelos/` (`HF_HOME`). Configuração em `~/.config/robo-pegasus/pegasus.env` (modo 600; nunca imprimir).
 - Modelo: `cyankiwi/Qwen3.8-27B-AWQ-INT4` (~20 GB na GPU; multimodal, arquitetura híbrida com Gated DeltaNet).
 - vLLM 0.33 + torch 2.14 (CUDA 13.0) na **GPU1** (`CUDA_VISIBLE_DEVICES=1`), com `--gpu-memory-utilization 0.85 --max-model-len 8192 --max-num-seqs 8`. Sem o `--max-num-seqs 8`, o perfil de CUDA graphs pede 13 GB extras e dá falta de memória. Usa ~26 GB da GPU1, sobrando ~6 GB.
+- Ferramentas (emoção): o serviço também usa `--enable-auto-tool-choice --tool-call-parser qwen3_coder`, porque o template do Qwen3.8 emite chamadas em XML (`<function=...>`). Sem isso o vLLM recusa requisições com `tools`.
 - A **GPU0** tem processos residentes do SciTech Ear (`scitechear-api` e `scitechear-worker`, ~3,7 GB). Não usar a GPU0 e não mexer nesses processos.
 - Serviço `pegasus-llm.service` (systemd --user, não habilitado; limite de 3 tentativas em 10 min). Ligar/desligar: `~/.local/bin/pegasus-ligar` e `pegasus-desligar`.
 - O `pegasus.env` define `CUDA_HOME` e `PATH` apontando para o `nvcc` do venv e `VLLM_USE_FLASHINFER_SAMPLER=0`: a compilação JIT do FlashInfer falha (nvcc 13.5 com cabeçalhos 13.0), então o amostrador do FlashInfer fica desligado.

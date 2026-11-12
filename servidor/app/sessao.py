@@ -11,6 +11,7 @@ import openai
 from fastapi import WebSocket
 
 from app.config import Config
+from app.pipeline.emocao import Emocao
 from app.pipeline.turno import Turno, falar, transcrever
 from app.wav import TAXA_ENTRADA
 
@@ -107,6 +108,9 @@ class Sessao:
     async def _falar(self, texto: str, turno: Turno) -> None:
         passo = None
         async for bloco in falar(texto, self.config, turno):
+            if isinstance(bloco, Emocao):
+                await self.enviar_json({"type": "emotion", "emotion": bloco.nome})
+                continue
             if self.estado != "falando":
                 await self.mudar_estado("falando")
             passo = passo or int(bloco.taxa * BLOCO_SAIDA_S) * 2
@@ -140,6 +144,7 @@ class Sessao:
                     "tablet": self.device_id,
                     "audio_s": round(duracao_s, 2),
                     "frases": len(turno.frases),
+                    "emocoes": turno.emocoes,
                     "ms": medidas,
                 },
                 ensure_ascii=False,
