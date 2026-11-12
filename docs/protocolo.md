@@ -31,8 +31,8 @@ Tablet                                   Servidor
   │ ── listen_start ────────────────────►  │
   │ ◄───────────────── state "ouvindo" ─── │
   │ ══ áudio PCM 16 kHz (20 ms) ════════►  │
-  │ ── listen_stop ─────────────────────►  │
-  │ ◄──────────────── state "pensando" ─── │
+  │                                        │   o VAD detecta o fim da fala
+  │ ◄──────────────── state "pensando" ─── │   (ou o tablet envia listen_stop)
   │ ◄────────────────────── stt {text} ─── │
   │ ◄──────────── emotion {"feliz"} ────── │   uma por turno, antes do 1º áudio
   │ ◄───────────────── state "falando" ─── │
@@ -42,7 +42,9 @@ Tablet                                   Servidor
   │ ◄───────────────── state "ocioso" ──── │
 ```
 
-**Meio-duplex:** o tablet desliga o microfone ao receber `state "pensando"` e só volta a ouvir com um novo `listen_start`. O servidor ignora áudio recebido fora do estado `ouvindo`.
+**Fim da fala:** o servidor detecta sozinho, com o Silero VAD, quando o usuário parou de falar: depois de `PEGASUS_VAD_SILENCIO_MS` (padrão 600 ms) de silêncio após a fala, a escuta termina e o servidor envia `state "pensando"`. O tablet não precisa enviar `listen_stop`, mas pode, para encerrar antes.
+
+**Meio-duplex:** o tablet desliga o microfone ao receber `state "pensando"` (ou `state "ocioso"`) e só volta a ouvir com um novo `listen_start`. O servidor ignora áudio recebido fora do estado `ouvindo`.
 
 ## Mensagens do tablet → servidor
 
@@ -72,9 +74,15 @@ Primeira mensagem da conexão, obrigatória em até 5 s.
 
 Começa a captar. Se o servidor estiver em `pensando` ou `falando`, o turno em andamento é interrompido (como num `abort`) e a escuta começa.
 
+Durante a escuta, o servidor:
+
+- encerra a escuta sozinho quando a fala termina (VAD) e responde;
+- volta a `ocioso`, sem responder, se não houver fala nenhuma em `PEGASUS_VAD_SEM_FALA_MS` (padrão 8 s) de áudio;
+- encerra a escuta e responde ao chegar a 30 s de áudio.
+
 ### Áudio (binário)
 
-Blocos de 20 ms de PCM entre `listen_start` e `listen_stop`. O servidor guarda no máximo 30 s por turno; o excedente é descartado.
+Blocos de 20 ms de PCM a partir do `listen_start`. O tablet continua enviando até receber `state "pensando"` ou `state "ocioso"`; o que chegar depois disso é descartado. Para o Whisper, o servidor recorta o áudio em volta da fala detectada (300 ms antes, 200 ms depois).
 
 ### `listen_stop`
 
@@ -82,7 +90,7 @@ Blocos de 20 ms de PCM entre `listen_start` e `listen_stop`. O servidor guarda n
 {"type": "listen_stop"}
 ```
 
-Fim da fala. O servidor transcreve e responde. Sem áudio recebido, volta a `ocioso`.
+Opcional: encerra a escuta antes de o VAD decidir (por exemplo, por um toque na tela). O servidor transcreve e responde. Sem áudio recebido, volta a `ocioso`.
 
 ### `abort`
 

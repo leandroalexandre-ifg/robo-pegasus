@@ -8,6 +8,7 @@ from fastapi.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect
 
 from app import main
+from app import sessao as sessao_mod
 from app.pipeline import llm, stt, tts
 from app.pipeline.emocao import Emocao
 
@@ -215,3 +216,81 @@ def test_sem_emocao_do_llm_envia_neutro_antes_do_audio(cliente, pipeline):
     assert emocoes == [{"type": "emotion", "emotion": "neutro"}]
     primeiro_audio = next(i for i, m in enumerate(recebidas) if isinstance(m, tuple))
     assert recebidas.index(emocoes[0]) < primeiro_audio
+
+
+class _DetectorFalso:
+    """Simula o Silero: fala de `inicio_s` a `fim_s`, fim decidido em `decide_s`."""
+
+    roteiro = (0.5, 1.5, 2.1)
+
+    def __init__(self, config):
+        self._inicio_s, self._fim_s, self._decide_s = self.roteiro
+        self._amostras = 0
+        self.inicio = self.fim = None
+        self.terminou = False
+
+    @property
+    def falou(self):
+        return self.inicio is not None
+
+    @property
+    def silencio_s(self):
+        return 0.0 if self.fim is None else self._amostras / 16_000 - self._fim_s
+
+    def processar(self, pcm):
+        if self.terminou:
+            return None
+        self._amostras += len(pcm) // 2
+        agora = self._amostras / 16_000
+        if self.inicio is None and agora >= self._inicio_s:
+            self.inicio = round(self._inicio_s * 16_000)
+            return "inicio"
+        if self.inicio is not None and agora >= self._fim_s:
+            self.fim = round(self._fim_s * 16_000)  # o silêncio começou
+        if self.fim is not None and agora >= self._decide_s:
+            self.terminou = True
+            return "fim"
+        return None
+
+
+def _enviar_audio(ws, segundos):
+    for _ in range(int(segundos / 0.02)):
+        ws.send_bytes(b"\x00\x00" * 320)
+
+
+def test_vad_encerra_a_escuta_sem_listen_stop(cliente, pipeline, monkeypatch):
+    monkeypatch.setattr(sessao_mod, "DetectorFala", _DetectorFalso)
+    with cliente.websocket_connect("/ws") as ws:
+        _conectar(ws)
+        ws.send_json({"type": "listen_start"})
+        assert ws.receive_json()["state"] == "ouvindo"
+        _enviar_audio(ws, 3.0)  # o fim é decidido aos 2,1 s; o resto é descartado
+        recebidas = _receber_ate_ocioso(ws)
+    assert _tipos(recebidas)[:3] == ["pensando", "stt", "emotion"]
+    # fala de 0,5 s a 1,5 s, com 0,3 s antes e 0,2 s depois
+    assert pipeline["audio_s"] == pytest.approx(1.5)
+
+
+def test_listen_stop_continua_valendo(cliente, pipeline, monkeypatch):
+    _DetectorFalso.roteiro = (0.2, 0.6, 99)  # o VAD nunca decide sozinho
+    monkeypatch.setattr(sessao_mod, "DetectorFala", _DetectorFalso)
+    try:
+        with cliente.websocket_connect("/ws") as ws:
+            _conectar(ws)
+            _falar(ws, 1.0)
+            assert _tipos(_receber_ate_ocioso(ws))[:2] == ["pensando", "stt"]
+    finally:
+        _DetectorFalso.roteiro = (0.5, 1.5, 2.1)
+    # recortado em volta da fala detectada: 0,2 - 0,3 → 0; 0,6 + 0,2 = 0,8
+    assert pipeline["audio_s"] == pytest.approx(0.8)
+
+
+def test_escuta_sem_fala_volta_a_ocioso(monkeypatch, pipeline):
+    monkeypatch.setenv("PEGASUS_VAD_SEM_FALA_MS", "400")
+    with TestClient(main.app) as c, c.websocket_connect("/ws") as ws:
+        _conectar(ws)
+        ws.send_json({"type": "listen_start"})
+        assert ws.receive_json()["state"] == "ouvindo"
+        _enviar_audio(ws, 0.5)  # silêncio (o Silero de verdade não vê fala)
+        assert ws.receive_json() == {"type": "state", "state": "ocioso"}
+    assert "audio_s" not in pipeline  # nada foi transcrito

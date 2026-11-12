@@ -82,6 +82,11 @@ class DetectorFala:
     def falou(self) -> bool:
         return self.inicio is not None
 
+    @property
+    def silencio_s(self) -> float:
+        """Silêncio desde o fim da fala até a última amostra avaliada."""
+        return 0.0 if self.fim is None else (self._amostras - self.fim) / TAXA_ENTRADA
+
     def processar(self, pcm: bytes) -> str | None:
         """Avalia mais áudio. Devolve "inicio" ou "fim" quando a fala começa ou termina."""
         if self.terminou:

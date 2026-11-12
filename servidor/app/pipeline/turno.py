@@ -31,6 +31,8 @@ class Turno:
     emocoes: list[str] = field(default_factory=list)
     tempos: dict[str, float] = field(default_factory=dict)
     tts_s: float = 0.0  # soma do tempo do Piper em todas as frases
+    fim_escuta: str = ""  # o que encerrou a escuta: vad, listen_stop ou limite
+    vad_s: float = 0.0  # silêncio esperado depois da fala até decidir que ela acabou
     _inicio: float = field(default_factory=time.perf_counter, repr=False)
 
     def marcar(self, etapa: str) -> None:

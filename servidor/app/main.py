@@ -17,7 +17,7 @@ import numpy as np
 from fastapi import FastAPI, WebSocket
 
 from app.config import Config, carregar_config, resumo_publico
-from app.pipeline import stt, tts
+from app.pipeline import stt, tts, vad
 from app.sessao import Sessao
 from app.wav import TAXA_ENTRADA
 
@@ -36,6 +36,7 @@ async def preparar_modelos(config: Config) -> int:
     """Carrega e aquece Whisper e Piper; devolve a taxa do áudio de saída."""
     await stt.carregar(config)
     voz = await tts.carregar(config)
+    vad.preparar()
     # A primeira execução compila os kernels do CTranslate2; melhor aqui que no 1º turno.
     await stt.transcrever(np.zeros(TAXA_ENTRADA, dtype=np.float32), config)
     await tts.sintetizar("Olá.", config)
@@ -145,7 +146,7 @@ async def _atender(ws: WebSocket, sessao: Sessao) -> None:
         if quadro["type"] == "websocket.disconnect":
             return
         if quadro.get("bytes") is not None:
-            sessao.ao_audio(quadro["bytes"])
+            await sessao.ao_audio(quadro["bytes"])
             continue
         try:
             mensagem = json.loads(quadro["text"])
