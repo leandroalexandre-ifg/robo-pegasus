@@ -1,7 +1,6 @@
 """Texto → resposta com o LLM servido pelo vLLM (API compatível com OpenAI)."""
 
-import time
-from dataclasses import dataclass
+from collections.abc import AsyncIterator
 
 from openai import AsyncOpenAI
 
@@ -10,12 +9,6 @@ from app.persona import PROMPT_SISTEMA
 
 _cliente: AsyncOpenAI | None = None
 _modelo: str | None = None
-
-
-@dataclass
-class RespostaLLM:
-    texto: str
-    primeiro_token_s: float | None
 
 
 async def _preparar(config: Config) -> tuple[AsyncOpenAI, str]:
@@ -27,10 +20,9 @@ async def _preparar(config: Config) -> tuple[AsyncOpenAI, str]:
     return _cliente, _modelo
 
 
-async def responder(texto_usuario: str, config: Config) -> RespostaLLM:
-    """Gera a resposta em fluxo e mede o tempo até o primeiro token."""
+async def gerar(texto_usuario: str, config: Config) -> AsyncIterator[str]:
+    """Devolve a resposta em pedaços de texto, à medida que o LLM gera."""
     cliente, modelo = await _preparar(config)
-    inicio = time.perf_counter()
     fluxo = await cliente.chat.completions.create(
         model=modelo,
         messages=[
@@ -43,14 +35,8 @@ async def responder(texto_usuario: str, config: Config) -> RespostaLLM:
         # Sem modo de raciocínio (<think>), por latência.
         extra_body={"chat_template_kwargs": {"enable_thinking": False}},
     )
-    partes: list[str] = []
-    primeiro_token_s = None
-    async for pedaco in fluxo:
-        if not pedaco.choices:
-            continue
-        delta = pedaco.choices[0].delta.content
-        if delta:
-            if primeiro_token_s is None:
-                primeiro_token_s = time.perf_counter() - inicio
-            partes.append(delta)
-    return RespostaLLM("".join(partes).strip(), primeiro_token_s)
+    # O async with fecha a conexão se o consumidor parar antes do fim (interrupção).
+    async with fluxo:
+        async for pedaco in fluxo:
+            if pedaco.choices and (delta := pedaco.choices[0].delta.content):
+                yield delta
