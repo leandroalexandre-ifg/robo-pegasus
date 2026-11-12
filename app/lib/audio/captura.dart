@@ -13,6 +13,11 @@ class Captura {
 
   bool _querAtiva = false;
 
+  /// Abrir e fechar o gravador ficam em fila: no modo contínuo o microfone
+  /// fecha e reabre a cada fala do robô, e duas aberturas ao mesmo tempo
+  /// deixariam o gravador duplicado.
+  Future<void> _ultima = Future.value();
+
   /// Verdadeiro do pedido de [iniciar] até [parar].
   bool get ativa => _querAtiva;
 
@@ -20,9 +25,26 @@ class Captura {
   Future<bool> pedirPermissao() => _gravador.hasPermission();
 
   /// Começa a captar. [aoBloco] recebe cada bloco de 20 ms.
-  Future<bool> iniciar(void Function(Uint8List bloco) aoBloco) async {
-    if (_querAtiva) return true;
+  Future<bool> iniciar(void Function(Uint8List bloco) aoBloco) {
     _querAtiva = true;
+    return _emOrdem(() => _abrir(aoBloco));
+  }
+
+  /// Para de captar e descarta o pedaço de bloco que sobrou.
+  Future<void> parar() {
+    _querAtiva = false;
+    return _emOrdem(_fechar);
+  }
+
+  Future<T> _emOrdem<T>(Future<T> Function() operacao) {
+    final resultado = _ultima.then((_) => operacao());
+    _ultima = resultado.then((_) {}, onError: (_) {});
+    return resultado;
+  }
+
+  Future<bool> _abrir(void Function(Uint8List bloco) aoBloco) async {
+    if (!_querAtiva) return false; // parar() veio antes de abrir
+    if (_assinatura != null) return true;
     if (!await _gravador.hasPermission()) {
       _querAtiva = false;
       return false;
@@ -38,11 +60,6 @@ class Captura {
         ),
       ),
     );
-    if (!_querAtiva) {
-      // parar() foi chamado enquanto o microfone abria.
-      await _gravador.stop();
-      return false;
-    }
     _assinatura = fluxo.listen((dados) {
       _sobra.add(dados);
       if (_sobra.length < bytesPorBloco) return;
@@ -58,9 +75,7 @@ class Captura {
     return true;
   }
 
-  /// Para de captar e descarta o pedaço de bloco que sobrou.
-  Future<void> parar() async {
-    _querAtiva = false;
+  Future<void> _fechar() async {
     final assinatura = _assinatura;
     if (assinatura == null) return;
     _assinatura = null;
