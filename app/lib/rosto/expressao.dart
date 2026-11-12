@@ -84,7 +84,7 @@ class Expressao {
     ),
     Emocao.pensativo => const Expressao(
       abertura: 0.8,
-      palpebraInferior: 0.15,
+      palpebraExterna: 0.2,
       sorriso: -0.1,
       larguraBoca: 0.65,
       olharX: -0.55,
