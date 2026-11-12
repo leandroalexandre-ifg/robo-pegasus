@@ -37,6 +37,7 @@ ssh -N -L 0.0.0.0:8000:localhost:8000 USUARIO@SERVIDOR_NUMBERS
 - O `pegasus.env` define `CUDA_HOME` e `PATH` apontando para o `nvcc` do venv e `VLLM_USE_FLASHINFER_SAMPLER=0`: a compilação JIT do FlashInfer falha (nvcc 13.5 com cabeçalhos 13.0), então o amostrador do FlashInfer fica desligado.
 - O Qwen3 responde com `<think>` por padrão. Para o robô, desligue o modo de raciocínio na chamada (`"chat_template_kwargs": {"enable_thinking": false}`), por latência.
 - Não tocar no SciTech Ear (unidades `scitechear-*`, checkout, Caddy em uso, Ollama, `.env`). Sem sudo.
+- Nunca ler `/proc/PID/environ` de nenhum processo, nem dos do Pegasus. Para confirmar a configuração em uso, use os logs (`journalctl --user -u pegasus-api`) ou um endpoint de status.
 
 ## Estrutura do repositório
 
