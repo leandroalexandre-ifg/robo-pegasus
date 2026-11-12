@@ -14,7 +14,8 @@ App Flutter (só Android) que mostra o rosto do robô e conversa com o servidor 
 
 Emoções (mensagem `emotion`): `neutro`, `feliz` (olhos em meia-lua, sorriso), `triste` (pálpebras caídas por fora, boca para baixo), `surpreso` (olhos grandes, boca em "O"), `pensativo` (olhar para cima, cabeça inclinada) e `bravo` (pálpebras baixas do lado do nariz). A emoção volta a `neutro` num novo `listen_start` ou 10 s depois do ocioso.
 
-- **Tocar** inicia a escuta; tocar de novo encerra e o robô responde. Tocar enquanto ele pensa ou fala interrompe e começa a ouvir.
+- **Tocar** inicia a escuta. O servidor percebe sozinho (VAD) quando você parou de falar e responde; se ninguém falar em 8 s, o rosto volta ao ocioso. Tocar durante a escuta encerra antes, sem esperar o VAD.
+- **Tocar enquanto ele pensa ou fala** envia `abort`, corta a voz na hora e volta a ouvir.
 - **Toque longo** abre a configuração do servidor (endereço, token e identificação do tablet). Fica salva no tablet.
 - Meio-duplex: o microfone só fica ligado enquanto está verde.
 
