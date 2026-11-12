@@ -6,9 +6,9 @@ from app.pipeline.emocao import (
     EMOCOES,
     FERRAMENTA,
     Emocao,
+    cortar_marcacoes,
     emocao_da_chamada,
     limpar_para_voz,
-    separar_marcacoes,
 )
 
 
@@ -33,44 +33,49 @@ def test_emocao_da_chamada(nome, argumentos, esperado):
     assert emocao_da_chamada(nome, argumentos) == esperado
 
 
-def _separar(pedacos):
+def _cortar(pedacos):
+    consumidos = []
+
     async def fluxo():
         for p in pedacos:
+            consumidos.append(p)
             yield p
 
     async def coletar():
-        return [x async for x in separar_marcacoes(fluxo())]
+        return "".join([x async for x in cortar_marcacoes(fluxo())])
 
-    itens = asyncio.run(coletar())
-    return "".join(x for x in itens if isinstance(x, str)), [
-        x for x in itens if not isinstance(x, str)
-    ]
+    return asyncio.run(coletar()), len(consumidos)
 
 
 def test_texto_sem_marcacao_passa_inteiro():
-    assert _separar(["Olá! ", "Tudo bem?"]) == ("Olá! Tudo bem?", [])
+    assert _cortar(["Olá! ", "Tudo bem?"]) == ("Olá! Tudo bem?", 2)
 
 
-def test_chamada_xml_vazada_vira_emocao():
-    xml = (
-        "<tool_call>\n<function=definir_emocao>\n<parameter=emocao>\nfeliz\n"
-        "</parameter>\n</function>\n</tool_call>"
-    )
-    pedacos = ["Que legal!", " <tool", "_call>"] + [xml[11:20], xml[20:]] + [" Parabéns."]
-    assert _separar(pedacos) == ("Que legal!  Parabéns.", [Emocao("feliz")])
+@pytest.mark.parametrize(
+    "imitacao",
+    [
+        '<tool_use>\n{"name": "definir_emocao", "arguments": {"emocao": "feliz"}}\n</tool_use>',
+        "<tool_call>\n<function=definir_emocao>\n<parameter=emocao>\nfeliz\n</parameter>",
+        "definir_emocao(feliz)",
+        "Definir_emoção: feliz",
+        '{"emocao": "feliz"}',
+        '{\n  "name": "definir_emocao"\n}',
+    ],
+)
+def test_corta_imitacao_de_chamada_e_para_de_ler(imitacao):
+    pedacos = ["Que notícia boa!", "\n"] + [imitacao[i : i + 3] for i in range(0, len(imitacao), 3)]
+    pedacos += ["Isto nunca é lido."]
+    texto, consumidos = _cortar(pedacos)
+    assert texto == "Que notícia boa!\n"
+    assert consumidos < len(pedacos)  # o fluxo do LLM é abandonado
 
 
-def test_chamada_json_vazada_vira_emocao():
-    bloco = '<tool_call>{"name": "definir_emocao", "arguments": {"emocao": "triste"}}</tool_call>'
-    assert _separar(["Sinto muito. ", bloco]) == ("Sinto muito. ", [Emocao("triste")])
+def test_menor_que_e_chave_comuns_passam():
+    assert _cortar(["3 < 5 ", "é verdade, {ok}."])[0] == "3 < 5 é verdade, {ok}."
 
 
-def test_menor_que_comum_nao_e_retido():
-    assert _separar(["3 < 5 ", "é verdade."]) == ("3 < 5 é verdade.", [])
-
-
-def test_bloco_sem_fechamento_no_fim_e_descartado():
-    assert _separar(["Oi. <tool_call><parameter=emocao>bravo"]) == ("Oi. ", [Emocao("bravo")])
+def test_palavra_parecida_com_marcador_passa():
+    assert _cortar(["Vamos def", "inir um plano."])[0] == "Vamos definir um plano."
 
 
 @pytest.mark.parametrize(
@@ -85,6 +90,8 @@ def test_bloco_sem_fechamento_no_fim_e_descartado():
         ("**Sete** vezes oito é `56`.", "Sete vezes oito é 56."),
         ("Oi <tool_call><function=definir_emocao></tool_call>", "Oi"),
         ("Fico <b>feliz</b> em ajudar.", "Fico feliz em ajudar."),
+        ("Oi! definir_emocao(feliz)", "Oi!"),
+        ('Oi! {"emocao": "feliz"}', "Oi!"),
         ("Estou feliz por você.", "Estou feliz por você."),
     ],
 )

@@ -9,15 +9,18 @@ from app.pipeline.emocao import Emocao
 
 
 class _Fluxo:
-    """Imita o AsyncStream do SDK da OpenAI."""
+    """Imita o AsyncStream do SDK da OpenAI e registra se foi fechado."""
 
     def __init__(self, pedacos):
         self._pedacos = pedacos
+        self.lidos = 0
+        self.fechado = False
 
     async def __aenter__(self):
         return self
 
     async def __aexit__(self, *_):
+        self.fechado = True
         return False
 
     def __aiter__(self):
@@ -25,18 +28,17 @@ class _Fluxo:
 
     async def _gerar(self):
         for p in self._pedacos:
+            self.lidos += 1
             yield p
 
 
 def _texto(t):
-    return NS(choices=[NS(delta=NS(content=t, tool_calls=None))])
+    return NS(choices=[NS(delta=NS(content=t))])
 
 
-def _chamada(nome, args, id_="c1"):
-    funcao = NS(name=nome, arguments=args)
-    return NS(
-        choices=[NS(delta=NS(content=None, tool_calls=[NS(index=0, id=id_, function=funcao)]))]
-    )
+def _resposta_ferramenta(*chamadas):
+    tool_calls = [NS(function=NS(name=n, arguments=a)) for n, a in chamadas]
+    return NS(choices=[NS(message=NS(content="", tool_calls=tool_calls or None))])
 
 
 @pytest.fixture
@@ -45,7 +47,7 @@ def cliente(monkeypatch):
 
     async def create(**kwargs):
         pedidos.append(kwargs)
-        return _Fluxo(respostas.pop(0))
+        return respostas.pop(0)
 
     falso = NS(chat=NS(completions=NS(create=create)))
 
@@ -63,41 +65,50 @@ def _gerar():
     return asyncio.run(coletar())
 
 
-def test_texto_e_depois_ferramenta(cliente):
+def _escolher():
+    return asyncio.run(llm.escolher_emocao("oi", carregar_config({})))
+
+
+def test_texto_vai_sem_ferramentas(cliente):
     respostas, pedidos = cliente
-    respostas.append(
-        [_texto("Que "), _texto("bom!"), _chamada("definir_emocao", '{"emocao": "feliz"}')]
-    )
-    assert _gerar() == ["Que ", "bom!", Emocao("feliz")]
-    assert len(pedidos) == 1
-    assert pedidos[0]["tools"][0]["function"]["name"] == "definir_emocao"
-    assert pedidos[0]["tool_choice"] == "auto"
+    respostas.append(_Fluxo([_texto("Que "), _texto("bom!")]))
+    assert _gerar() == ["Que ", "bom!"]
+    assert "tools" not in pedidos[0]
+    assert pedidos[0]["stream"] is True
     assert pedidos[0]["extra_body"] == {"chat_template_kwargs": {"enable_thinking": False}}
 
 
-def test_so_ferramenta_pede_a_fala_em_segunda_rodada(cliente):
-    respostas, pedidos = cliente
-    respostas.append([_chamada("definir_emocao", '{"emocao": "triste"}', id_="abc")])
-    respostas.append([_texto("Sinto muito.")])
-    assert _gerar() == [Emocao("triste"), "Sinto muito."]
-    assert len(pedidos) == 2
-    segunda = pedidos[1]
-    assert "tools" not in segunda and "tool_choice" not in segunda
-    assert segunda["messages"][-2]["tool_calls"][0]["id"] == "abc"
-    assert segunda["messages"][-1] == {"role": "tool", "tool_call_id": "abc", "content": "ok"}
-
-
-def test_emocao_invalida_e_ignorada(cliente):
+def test_imitacao_de_chamada_encerra_a_fala_e_fecha_o_fluxo(cliente):
     respostas, _ = cliente
-    respostas.append([_texto("Oi."), _chamada("definir_emocao", '{"emocao": "eufórico"}')])
-    assert _gerar() == ["Oi."]
+    pedacos = [_texto("Que bom!"), _texto("\n<tool_use>"), _texto('{"name": "x"}')]
+    pedacos += [_texto("resto")] * 50
+    fluxo = _Fluxo(pedacos)
+    respostas.append(fluxo)
+    assert "".join(_gerar()) == "Que bom!\n"
+    assert fluxo.fechado
+    assert fluxo.lidos < len(pedacos)
 
 
-def test_marcacao_vazada_no_texto_vira_emocao(cliente):
+def test_escolher_emocao_obriga_a_ferramenta(cliente):
     respostas, pedidos = cliente
-    vazada = "<tool_call>\n<function=definir_emocao>\n<parameter=emocao>\nsurpreso\n</parameter>"
-    respostas.append([_texto("Uau! "), _texto(vazada), _texto("\n</function>\n</tool_call>")])
-    itens = _gerar()
-    assert [i for i in itens if isinstance(i, Emocao)] == [Emocao("surpreso")]
-    assert "".join(i for i in itens if isinstance(i, str)).strip() == "Uau!"
-    assert len(pedidos) == 1  # houve fala: não precisa de segunda rodada
+    respostas.append(_resposta_ferramenta(("definir_emocao", '{"emocao": "triste"}')))
+    assert _escolher() == Emocao("triste")
+    pedido = pedidos[0]
+    assert pedido["tools"][0]["function"]["name"] == "definir_emocao"
+    assert pedido["tool_choice"] == {"type": "function", "function": {"name": "definir_emocao"}}
+    assert "stream" not in pedido
+
+
+@pytest.mark.parametrize(
+    "chamadas",
+    [
+        (),
+        (("definir_emocao", '{"emocao": "eufórico"}'),),
+        (("definir_emocao", "{}"),),
+        (("outra", '{"emocao": "feliz"}'),),
+    ],
+)
+def test_escolher_emocao_sem_emocao_valida_devolve_none(cliente, chamadas):
+    respostas, _ = cliente
+    respostas.append(_resposta_ferramenta(*chamadas))
+    assert _escolher() is None

@@ -44,56 +44,62 @@ def emocao_da_chamada(nome_ferramenta: str, argumentos: str) -> Emocao | None:
     return _validar(dados.get("emocao")) if isinstance(dados, dict) else None
 
 
-# Chamada de ferramenta que vazou no texto, nos formatos XML (Qwen3) e JSON (Hermes).
-_INICIO, _FIM = "<tool_call>", "</tool_call>"
-_EMOCAO_XML = re.compile(r"<parameter=emocao>\s*(\w+)")
-_EMOCAO_JSON = re.compile(r"\"emocao\"\s*:\s*\"(\w+)\"")
+# Imitações de chamada de ferramenta escritas no texto, em qualquer formato:
+# <tool_call>, <tool_use>, <function=...>, {"name": ...}, definir_emocao(...).
+_MARCADOR = re.compile(
+    r"<\s*/?\s*(?:tool|function|parameter)|definir_?emo|\{\s*\"(?:name|emocao|arguments)\"",
+    re.I,
+)
+_PREFIXOS = (
+    "<tool",
+    "</tool",
+    "<function",
+    "</function",
+    "<parameter",
+    '{"name"',
+    '{"emocao"',
+    '{"arguments"',
+    "definir_emo",
+)
 
 
-def _emocao_da_marcacao(bloco: str) -> Emocao | None:
-    m = _EMOCAO_XML.search(bloco) or _EMOCAO_JSON.search(bloco)
-    return _validar(m.group(1)) if m else None
+def _pode_comecar_marcador(trecho: str) -> bool:
+    t = re.sub(r"\s+", "", trecho).lower()
+    return bool(t) and any(p.startswith(t) for p in _PREFIXOS)
 
 
-async def separar_marcacoes(pedacos: AsyncIterable[str]) -> AsyncIterator[str | Emocao]:
-    """Retira do fluxo de texto blocos <tool_call>…</tool_call> que o parser do vLLM
-    não tenha capturado, convertendo-os em Emocao. O resto do texto passa adiante."""
+def _corte_seguro(texto: str) -> int:
+    """Até onde o texto pode seguir: o fim pode ser o começo de um marcador partido."""
+    candidatos = [texto.rfind("<"), texto.rfind("{")]
+    if m := re.search(r"\w+$", texto):
+        candidatos.append(m.start())
+    suspeitos = [i for i in candidatos if i >= 0 and _pode_comecar_marcador(texto[i:])]
+    return min(suspeitos, default=len(texto))
+
+
+async def cortar_marcacoes(pedacos: AsyncIterable[str]) -> AsyncIterator[str]:
+    """Repassa o texto até a primeira imitação de chamada de ferramenta e descarta o
+    resto. O LLM só escreve a chamada depois da fala, então nada a ser dito se perde."""
     pendente = ""
     async for pedaco in pedacos:
         pendente += pedaco
-        while True:
-            inicio = pendente.find(_INICIO)
-            if inicio < 0:
-                # Segura um possível começo de "<tool_call>" partido entre pedaços.
-                corte = pendente.rfind("<")
-                if corte >= 0 and _INICIO.startswith(pendente[corte:]):
-                    texto, pendente = pendente[:corte], pendente[corte:]
-                else:
-                    texto, pendente = pendente, ""
-                if texto:
-                    yield texto
-                break
-            fim = pendente.find(_FIM, inicio)
-            if fim < 0:
-                if inicio:
-                    yield pendente[:inicio]
-                    pendente = pendente[inicio:]
-                break
-            if inicio:
-                yield pendente[:inicio]
-            if emocao := _emocao_da_marcacao(pendente[inicio:fim]):
-                yield emocao
-            pendente = pendente[fim + len(_FIM) :]
-    if pendente.startswith(_INICIO):
-        if emocao := _emocao_da_marcacao(pendente):
-            yield emocao
-    elif pendente:
+        if m := _MARCADOR.search(pendente):
+            if pendente[: m.start()]:
+                yield pendente[: m.start()]
+            return
+        corte = _corte_seguro(pendente)
+        if corte:
+            yield pendente[:corte]
+            pendente = pendente[corte:]
+    if pendente:
         yield pendente
 
 
 _NOMES = "|".join(EMOCOES)
 _LIMPEZA = [
     re.compile(r"<tool_call>.*?(</tool_call>|$)", re.S),  # chamada de ferramenta no texto
+    re.compile(r"definir_?emo\w*\s*(\([^)]*\))?", re.I),  # definir_emocao(feliz)
+    re.compile(r"\{[^{}]*\}"),  # objetos JSON
     re.compile(r"</?[a-zA-Z_][^<>]*>"),  # outras marcações <...>
     re.compile(rf"[\[(]\s*(?:emo[cç][aã]o\s*:\s*)?(?:{_NOMES})\s*[\])]", re.I),  # [feliz] (triste)
     re.compile(r"\*[^*\n]{1,40}\*"),  # ações entre asteriscos: *sorri*
