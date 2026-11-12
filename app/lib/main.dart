@@ -59,9 +59,17 @@ class TelaRosto extends StatelessWidget {
         onTap: robo.aoTocar,
         onLongPress: () => _configurar(context),
         child: ListenableBuilder(
-          listenable: Listenable.merge([robo.estado, robo.legenda]),
-          builder: (context, _) =>
-              Rosto(estado: robo.estado.value, legenda: robo.legenda.value),
+          listenable: Listenable.merge([
+            robo.estado,
+            robo.emocao,
+            robo.legenda,
+          ]),
+          builder: (context, _) => Rosto(
+            estado: robo.estado.value,
+            emocao: robo.emocao.value,
+            nivelVoz: robo.nivelVoz,
+            legenda: robo.legenda.value,
+          ),
         ),
       ),
     );
