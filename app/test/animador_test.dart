@@ -77,4 +77,24 @@ void main() {
     );
     expect(a.cor.toARGB32(), EstadoRosto.ocioso.cor.toARGB32());
   });
+
+  test('sinal de espera do nome só aparece ocioso e some suave', () {
+    final a = AnimadorRosto(aleatorio: Random(4))
+      ..estado = EstadoRosto.ocioso
+      ..esperandoNome = true;
+    _rodar(a, 2);
+    expect(a.sinalNome, greaterThan(0.95));
+
+    a.estado = EstadoRosto.falando; // o robô fala: o sinal sai
+    a.avancar(_dt);
+    expect(a.sinalNome, greaterThan(0.9)); // sem sumir de repente
+    _rodar(a, 2);
+    expect(a.sinalNome, lessThan(0.05));
+
+    a
+      ..estado = EstadoRosto.ocioso
+      ..esperandoNome = false; // modo toque
+    _rodar(a, 2);
+    expect(a.sinalNome, lessThan(0.05));
+  });
 }

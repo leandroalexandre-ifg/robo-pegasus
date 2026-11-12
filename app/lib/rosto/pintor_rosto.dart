@@ -70,6 +70,32 @@ class PintorRosto extends CustomPainter {
           ..strokeJoin = StrokeJoin.round,
       )
       ..restore();
+
+    _sinalNome(canvas, size, centro, s);
+  }
+
+  /// Sinal discreto de "ouvindo à espera do nome": um pontinho verde abaixo
+  /// da boca, pulsando devagar, como a luz de um microfone ligado.
+  void _sinalNome(Canvas canvas, Size size, Offset centro, double s) {
+    final a = animador;
+    if (a.sinalNome < 0.01) return;
+    final pulso = 0.5 + 0.5 * sin(a.tempo * 2 * pi / 2.4);
+    final alfa = a.sinalNome * (0.3 + 0.35 * pulso);
+    final ponto = centro + Offset(0, 0.36 * s);
+    final cor = EstadoRosto.ouvindo.cor;
+    canvas
+      ..drawCircle(
+        ponto,
+        0.016 * s,
+        Paint()
+          ..color = cor.withValues(alpha: alfa * 0.6)
+          ..maskFilter = MaskFilter.blur(BlurStyle.normal, 0.012 * s),
+      )
+      ..drawCircle(
+        ponto,
+        0.008 * s,
+        Paint()..color = cor.withValues(alpha: alfa),
+      );
   }
 
   /// Um olho: retângulo bem arredondado, recortado pelas pálpebras.

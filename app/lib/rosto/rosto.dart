@@ -15,6 +15,7 @@ class Rosto extends StatefulWidget {
     this.emocao = Emocao.neutro,
     this.nivelVoz,
     this.legenda,
+    this.esperandoNome = false,
   });
 
   final EstadoRosto estado;
@@ -23,6 +24,9 @@ class Rosto extends StatefulWidget {
   /// Volume da voz que está tocando (RMS, 0 a 1), lido a cada quadro.
   final double Function()? nivelVoz;
   final String? legenda;
+
+  /// Modo palavra: microfone aberto à espera do nome (sinal discreto).
+  final bool esperandoNome;
 
   @override
   State<Rosto> createState() => _RostoState();
@@ -40,7 +44,8 @@ class _RostoState extends State<Rosto> with SingleTickerProviderStateMixin {
     super.initState();
     _animador
       ..estado = widget.estado
-      ..emocao = widget.emocao;
+      ..emocao = widget.emocao
+      ..esperandoNome = widget.esperandoNome;
     _ticker.start();
   }
 
@@ -49,7 +54,8 @@ class _RostoState extends State<Rosto> with SingleTickerProviderStateMixin {
     super.didUpdateWidget(antigo);
     _animador
       ..estado = widget.estado
-      ..emocao = widget.emocao;
+      ..emocao = widget.emocao
+      ..esperandoNome = widget.esperandoNome;
   }
 
   void _aoQuadro(Duration agora) {

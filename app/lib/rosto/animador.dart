@@ -43,6 +43,12 @@ class AnimadorRosto extends ChangeNotifier {
   /// Segundos desde o início, para movimentos lentos (respiração).
   double tempo = 0;
 
+  /// Sinal de "ouvindo à espera do nome", 0 a 1, com entrada e saída suaves.
+  double sinalNome = 0;
+
+  /// Liga o sinal de "ouvindo à espera do nome" (modo palavra).
+  bool esperandoNome = false;
+
   EstadoRosto get estado => _estado;
   Emocao get emocao => _emocao;
 
@@ -79,6 +85,8 @@ class AnimadorRosto extends ChangeNotifier {
     tempo += dt;
     expressao = Expressao.lerp(expressao, _alvo, _passo(dt, 0.15));
     cor = Color.lerp(cor, _estado.cor, _passo(dt, 0.25))!;
+    final alvoSinal = esperandoNome && _estado == EstadoRosto.ocioso ? 1 : 0;
+    sinalNome += (alvoSinal - sinalNome) * _passo(dt, 0.4);
     _animarPiscada();
     _animarOlhar(dt);
     _animarBoca(dt);
