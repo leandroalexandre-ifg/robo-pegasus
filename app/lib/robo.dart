@@ -12,9 +12,11 @@ import 'rosto/estado_rosto.dart';
 
 /// Junta conexão, microfone e alto-falante e decide o estado do rosto.
 ///
-/// Meio-duplex: o microfone só fica ligado entre o toque que inicia a escuta
-/// e o toque que a encerra (ou o `pensando` do servidor). Enquanto o robô
-/// fala, o microfone está desligado.
+/// Um toque inicia a escuta; o servidor decide o fim da fala pelo VAD e
+/// manda `pensando` (ou `ocioso`, se ninguém falou). Meio-duplex: o
+/// microfone só fica ligado durante a escuta; enquanto o robô fala, está
+/// desligado. Tocar enquanto o robô pensa ou fala envia `abort` e volta a
+/// ouvir.
 class Robo {
   Robo(this._config) : _cliente = Cliente(_config);
 
@@ -65,8 +67,9 @@ class Robo {
     _cliente.trocarConfig(config);
   }
 
-  /// Toque na tela: inicia ou encerra a escuta. Se o robô estiver pensando
-  /// ou falando, interrompe e começa a ouvir.
+  /// Toque na tela: inicia a escuta. Se o robô estiver pensando ou falando,
+  /// envia `abort` e começa a ouvir. Durante a escuta, um toque encerra a
+  /// fala antes do VAD (`listen_stop`).
   Future<void> aoTocar() async {
     if (!_cliente.conectado.value) {
       _cliente.trocarConfig(_config); // tenta de novo agora
@@ -77,7 +80,14 @@ class Robo {
       _cliente.enviarTexto(listenStop());
       return;
     }
+    final ocupado =
+        _servidor == EstadoServidor.pensando ||
+        _servidor == EstadoServidor.falando ||
+        _reproducao.tocando.value;
     _reproducao.descartar();
+    // O `ocioso` que responde ao abort chega antes do `ouvindo` e é
+    // ignorado porque já estamos aguardando a escuta.
+    if (ocupado) _cliente.enviarTexto(abort());
     _aguardandoEscuta = true;
     legenda.value = null;
     _timerEmocao?.cancel();
