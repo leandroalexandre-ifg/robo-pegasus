@@ -131,6 +131,11 @@ async def turno(ws, entrada: Path, saida: Path, args, taxa: int) -> int:
         elif tipo == "state" and mensagem["state"] in ("ocioso", "ouvindo"):
             recebido["fim"] = instante  # ouvindo: o "Oi?" da palavra de ativação
             break
+        elif tipo == "state" and mensagem["state"] == "desconectado":
+            print("Servidor de linguagem fora do ar (state desconectado).")
+            parar.set()
+            await envio
+            return 1
     fim_da_fala = await envio
 
     print(f"Reconhecido: {reconhecido or '(nada)'}")
