@@ -11,6 +11,32 @@ Robô conversacional inspirado no Xiaozhi ESP32: um app Flutter num tablet Andro
 - Use código aberto sempre que possível. Antes de adicionar um modelo, voz ou biblioteca, confira a licença e registre em `docs/licencas.md`.
 - Commits pequenos e descritivos, um assunto por commit.
 
+## Ambiente de desenvolvimento
+
+- **Estação de trabalho:** MacBook. O app Flutter é desenvolvido e testado aqui, com o tablet ligado ao Mac.
+- **Servidor de IA:** servidor do núcleo NumbERS, no datacenter do IFG, com a RTX 5090. O código de `servidor/` roda e é testado lá, acessado por SSH.
+- **Fluxo:** o código vai do Mac para o servidor pelo GitHub (`git push` no Mac, `git pull` no servidor). Nunca edite direto no servidor sem commitar.
+- **GPU compartilhada:** o servidor atende outros projetos. Antes de subir o vLLM, confira o uso com `nvidia-smi` e nunca mexa em driver, CUDA ou configurações globais do sistema.
+- **Durante o desenvolvimento, o tablet acessa o servidor por um túnel SSH aberto no Mac:**
+
+```bash
+ssh -N -L 0.0.0.0:8000:localhost:8000 USUARIO@SERVIDOR_NUMBERS
+```
+
+  O tablet, na mesma rede Wi-Fi do Mac, conecta em `ws://IP_DO_MAC:8000`. O acesso definitivo (porta liberada ou VPN do IFG) será combinado com a TI.
+
+## Implantação no servidor (Fase 0 concluída)
+
+- Código em `/data/projects/leandro/robo-pegasus`, ambiente em `.venv` (criado com `uv`, **sem pip**: instale pacotes com `~/.local/bin/uv pip install --python .venv ...`).
+- Modelos em `modelos/` (`HF_HOME`). Configuração em `~/.config/robo-pegasus/pegasus.env` (modo 600; nunca imprimir).
+- Modelo: `cyankiwi/Qwen3.8-27B-AWQ-INT4` (~20 GB na GPU; multimodal, arquitetura híbrida com Gated DeltaNet).
+- vLLM 0.33 + torch 2.14 (CUDA 13.0) na **GPU1** (`CUDA_VISIBLE_DEVICES=1`), com `--gpu-memory-utilization 0.85 --max-model-len 8192 --max-num-seqs 8`. Sem o `--max-num-seqs 8`, o perfil de CUDA graphs pede 13 GB extras e dá falta de memória. Usa ~26 GB da GPU1, sobrando ~6 GB.
+- A **GPU0** tem processos residentes do SciTech Ear (`scitechear-api` e `scitechear-worker`, ~3,7 GB). Não usar a GPU0 e não mexer nesses processos.
+- Serviço `pegasus-llm.service` (systemd --user, não habilitado; limite de 3 tentativas em 10 min). Ligar/desligar: `~/.local/bin/pegasus-ligar` e `pegasus-desligar`.
+- O `pegasus.env` define `CUDA_HOME` e `PATH` apontando para o `nvcc` do venv e `VLLM_USE_FLASHINFER_SAMPLER=0`: a compilação JIT do FlashInfer falha (nvcc 13.5 com cabeçalhos 13.0), então o amostrador do FlashInfer fica desligado.
+- O Qwen3 responde com `<think>` por padrão. Para o robô, desligue o modo de raciocínio na chamada (`"chat_template_kwargs": {"enable_thinking": false}`), por latência.
+- Não tocar no SciTech Ear (unidades `scitechear-*`, checkout, Caddy em uso, Ollama, `.env`). Sem sudo.
+
 ## Estrutura do repositório
 
 ```
@@ -60,7 +86,7 @@ Tablet (Flutter)  ──WebSocket wss──►  Servidor (RTX 5090)
 | Texto → fala | Piper, voz pt-BR |
 | Orquestração | Python 3.12, FastAPI, asyncio |
 
-**RTX 5090 (Blackwell):** exige driver NVIDIA recente e CUDA 12.8 ou superior. Use builds do PyTorch e do vLLM compatíveis com CUDA 12.8. Limite o vLLM com `--gpu-memory-utilization 0.6` para dividir a GPU com o Whisper.
+**RTX 5090 (Blackwell):** a configuração que funciona está em "Implantação no servidor". O vLLM ocupa ~26 GB da GPU1 e sobram ~6 GB; decidir na Fase 1 se o Whisper fica nessa folga ou em outro lugar.
 
 Comandos (ajustar quando o projeto existir):
 
@@ -121,6 +147,8 @@ Resumo:
 
 ## Fase atual
 
-**Fase 0, ambiente:** Ubuntu, driver, CUDA 12.8, Docker e vLLM rodando na RTX 5090. Pronto quando o PyTorch e o vLLM usarem a GPU e responderem a um teste.
+**Fase 0 concluída:** o vLLM sobe na GPU1 em ~2 min e responde em português pela API em `127.0.0.1:8101`.
 
-Próximas fases: 1 pipeline no servidor · 2 app mínimo (primeira conversa completa) · 3 rosto · 4 conversa natural (palavra de ativação, interrupção, persona) · 5 robustez · 6 piloto. Detalhes em `docs/plano.md`.
+**Fase 1 (atual), pipeline no servidor:** áudio → texto → resposta → voz, medindo o tempo de cada etapa.
+
+Próximas fases: 2 app mínimo (primeira conversa completa) · 3 rosto · 4 conversa natural (palavra de ativação, interrupção, persona) · 5 robustez · 6 piloto. Detalhes em `docs/plano.md`.
