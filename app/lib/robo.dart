@@ -34,7 +34,7 @@ class Robo {
   final estado = ValueNotifier<EstadoRosto>(EstadoRosto.desconectado);
 
   /// Emoção sobreposta ao estado. Volta a `neutro` num novo `listen_start`
-  /// ou depois de [_duracaoEmocao] com o robô ocioso.
+  /// ou depois de [_duracaoEmocao] com o rosto ocioso (fala já tocada).
   final emocao = ValueNotifier<Emocao>(Emocao.neutro);
   Timer? _timerEmocao;
   static const _duracaoEmocao = Duration(seconds: 10);
@@ -119,12 +119,6 @@ class Robo {
     switch (msg) {
       case Estado(:final estado):
         _servidor = estado;
-        _timerEmocao?.cancel();
-        if (estado == EstadoServidor.ocioso) {
-          _timerEmocao = Timer(_duracaoEmocao, () {
-            emocao.value = Emocao.neutro;
-          });
-        }
         if (estado == EstadoServidor.ouvindo) {
           _aguardandoEscuta = false;
         } else if (!_aguardandoEscuta && _captura.ativa) {
@@ -156,6 +150,7 @@ class Robo {
   }
 
   void _atualizar() {
+    final anterior = estado.value;
     estado.value = estadoExibido(
       conectado: _cliente.conectado.value,
       microfone: _captura.ativa,
@@ -165,6 +160,17 @@ class Robo {
     );
     if (!_cliente.conectado.value && _cliente.motivo.value != null) {
       legenda.value = _cliente.motivo.value;
+    }
+    // A emoção some um tempo depois de o rosto ficar ocioso, isto é, depois
+    // que a fala terminou de tocar (não no `ocioso` do servidor, que chega
+    // enquanto o áudio ainda toca).
+    if (estado.value != anterior) {
+      _timerEmocao?.cancel();
+      if (estado.value == EstadoRosto.ocioso) {
+        _timerEmocao = Timer(_duracaoEmocao, () {
+          emocao.value = Emocao.neutro;
+        });
+      }
     }
   }
 }

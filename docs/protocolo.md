@@ -175,7 +175,7 @@ Emoção a sobrepor ao estado do rosto. Valores: `neutro`, `feliz`, `triste`, `s
 
 - Vem da ferramenta `definir_emocao(emocao)` do LLM. O servidor valida o valor e descarta emoções fora da lista.
 - Pode chegar a qualquer momento entre `stt` e `state "ocioso"`: durante `pensando` (se o LLM escolher a emoção antes de falar) ou no meio de `falando` (se escolher depois do texto, como o prompt atual pede). Pode haver mais de uma por turno; vale a mais recente.
-- A emoção vale até a próxima `emotion`, até o próximo `listen_start` ou até 10 s depois de o robô voltar a `ocioso`; então o rosto volta a `neutro`. O app não zera a emoção no próprio `state "ocioso"` porque o áudio da resposta ainda está tocando nesse momento (o servidor envia mais rápido do que toca) e a emoção, pedida ao final da fala, mal apareceria. Um turno sem `emotion` é exibido como `neutro`.
+- A emoção vale até a próxima `emotion`, até o próximo `listen_start` ou até 10 s depois de o rosto voltar a `ocioso` com o áudio da resposta já tocado; então o rosto volta a `neutro`. O app não zera a emoção no próprio `state "ocioso"` porque o áudio da resposta ainda está tocando nesse momento (o servidor envia mais rápido do que toca) e a emoção, pedida ao final da fala, mal apareceria. Um turno sem `emotion` é exibido como `neutro`.
 - O texto de `tts_start` e o áudio nunca contêm marcações de emoção nem de ferramenta: o servidor remove do texto chamadas `<tool_call>`, marcas como `[feliz]` ou `*sorri*`, emojis e símbolos de markdown antes da síntese.
 
 ## Fechamento
