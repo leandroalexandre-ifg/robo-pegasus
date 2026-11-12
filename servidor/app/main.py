@@ -16,7 +16,7 @@ from contextlib import asynccontextmanager
 import numpy as np
 from fastapi import FastAPI, WebSocket
 
-from app import persona
+from app import persona, registro
 from app.config import Config, carregar_config, resumo_publico
 from app.pipeline import stt, tts, vad
 from app.sessao import Sessao
@@ -49,11 +49,16 @@ async def lifespan(app: FastAPI):
     logging.basicConfig(
         level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s"
     )
+    # O faster-whisper registra a duração de cada áudio; na escuta contínua isso
+    # deixaria rastro das falas descartadas.
+    logging.getLogger("faster_whisper").setLevel(logging.WARNING)
     config = carregar_config()
+    arquivo_turnos = registro.configurar(config.log_pasta, config.log_dias)
     if not config.tokens:
         log.warning("PEGASUS_TOKENS vazio: todas as conexões serão recusadas.")
     log.info("configuração: %s", json.dumps(resumo_publico(config), ensure_ascii=False))
     p = persona.carregar(config.persona_arquivo)
+    log.info("turnos registrados em %s", arquivo_turnos)
     log.info("persona: %s (%d frases no máximo)", p.nome, p.frases_max)
     app.state.config = config
     app.state.taxa_saida = await preparar_modelos(config)

@@ -107,7 +107,8 @@ def _emocoes(chamadas: dict[int, dict]) -> list[Emocao]:
         if emocao := emocao_da_chamada(c["nome"], c["args"]):
             emocoes.append(emocao)
         else:
-            log.warning("chamada de ferramenta ignorada: %s(%s)", c["nome"], c["args"])
+            # Os argumentos são texto livre do modelo: não vão para o log.
+            log.warning("chamada de ferramenta ignorada: %s", c["nome"][:40])
     return emocoes
 
 
@@ -174,9 +175,5 @@ async def escolher_emocao(
     for chamada in resposta.choices[0].message.tool_calls or []:
         if emocao := emocao_da_chamada(chamada.function.name, chamada.function.arguments):
             return emocao
-        log.warning(
-            "chamada de ferramenta ignorada: %s(%s)",
-            chamada.function.name,
-            chamada.function.arguments,
-        )
+        log.warning("chamada de ferramenta ignorada: %s", chamada.function.name[:40])
     return None

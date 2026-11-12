@@ -42,6 +42,11 @@ class Turno:
         self.tempos.setdefault(etapa, time.perf_counter() - self._inicio)
 
     @property
+    def etapa(self) -> str:
+        """A última etapa concluída (onde o turno estava ao falhar)."""
+        return max(self.tempos, key=self.tempos.__getitem__, default="inicio")
+
+    @property
     def resposta(self) -> str:
         return " ".join(self.frases)
 

@@ -12,6 +12,7 @@ import numpy as np
 import openai
 from fastapi import WebSocket
 
+from app import registro
 from app.config import Config
 from app.pipeline import ativacao, stt, tts
 from app.pipeline.emocao import Emocao
@@ -201,9 +202,9 @@ class Sessao:
             await self.mudar_estado("pensando")
             await self._responder(pcm, turno, pedido)
         else:
-            await self._saudar(turno)
+            await self._saudar(turno, len(pcm) / 2 / TAXA_ENTRADA)
 
-    async def _saudar(self, turno: Turno) -> None:
+    async def _saudar(self, turno: Turno, duracao_s: float) -> None:
         """Só a palavra de ativação: responde "Oi?" e abre a escuta da pergunta."""
         try:
             pcm, taxa = await tts.sintetizar(SAUDACAO, self.config)
@@ -217,15 +218,7 @@ class Sessao:
             log.exception("sessão %s: falha na saudação", self.id)
             await self._falhar("Ocorreu um erro no servidor.")
             return
-        ms = {k: round(v * 1000) for k, v in turno.tempos.items()}
-        log.info(
-            "sessão %s: ativada pela palavra; %s em %d ms do fim da fala (vad %d ms, stt %d ms)",
-            self.id,
-            SAUDACAO,
-            round(turno.vad_s * 1000) + ms["primeiro_envio"],
-            round(turno.vad_s * 1000),
-            ms["stt"],
-        )
+        registro.registrar("ativacao", **self._medidas(turno, duracao_s))
 
     async def cancelar_turno(self) -> None:
         """Interrompe na hora o turno em andamento: STT, LLM (o fluxo é fechado e o
@@ -259,6 +252,7 @@ class Sessao:
         """Responde à fala. Com `texto`, ela já foi transcrita (palavra de ativação)."""
         memoria = tuple(self.historico)
         turno.memoria = len(memoria)
+        duracao_s = len(pcm) / 2 / TAXA_ENTRADA
         try:
             if texto is None:
                 texto = await transcrever(_amostras(pcm), self.config, turno)
@@ -268,16 +262,20 @@ class Sessao:
             await self.mudar_estado("ocioso")
         except asyncio.CancelledError:
             self._lembrar(turno)
+            registro.registrar("interrompido", **self._medidas(turno, duracao_s))
             raise
         except openai.APIError as e:
-            log.error("sessão %s: falha no LLM: %s", self.id, e)
+            log.error("sessão %s: falha no LLM (%s)", self.id, type(e).__name__)
+            self._registrar_falha(turno, duracao_s, e)
             await self._falhar("O servidor de linguagem não está disponível.")
-        except Exception:
+        except Exception as e:
             log.exception("sessão %s: falha no turno", self.id)
+            self._registrar_falha(turno, duracao_s, e)
             await self._falhar("Ocorreu um erro no servidor.")
         else:
             self._lembrar(turno)
-            self._registrar(turno, len(pcm) / 2 / TAXA_ENTRADA)
+            tipo = "turno" if turno.frases else "sem_fala"
+            registro.registrar(tipo, **self._medidas(turno, duracao_s))
 
     async def _falar(self, texto: str, turno: Turno, memoria: tuple[tuple[str, str], ...]) -> None:
         async for bloco in falar(texto, self.config, turno, memoria):
@@ -308,27 +306,25 @@ class Sessao:
             await self.enviar_json({"type": "error", "message": mensagem})
             await self.mudar_estado("ocioso")
 
-    def _registrar(self, turno: Turno, duracao_s: float) -> None:
-        medidas = {k: round(v * 1000) for k, v in turno.tempos.items()}
-        medidas["tts_soma"] = round(turno.tts_s * 1000)
-        medidas["vad"] = round(turno.vad_s * 1000)
-        if "primeiro_envio" in medidas:
+    def _medidas(self, turno: Turno, duracao_s: float) -> dict:
+        """Campos do registro do turno: tempos e contagens, nunca o texto."""
+        ms = {k: round(v * 1000) for k, v in turno.tempos.items()}
+        ms["tts_soma"] = round(turno.tts_s * 1000)
+        ms["vad"] = round(turno.vad_s * 1000)
+        if "primeiro_envio" in ms:
             # Meta do projeto: do fim da fala ao primeiro som, incluindo a espera do VAD.
-            medidas["fala_ate_primeiro_audio"] = medidas["vad"] + medidas["primeiro_envio"]
-        log.info(
-            "turno %s",
-            json.dumps(
-                {
-                    "sessao": self.id,
-                    "tablet": self.device_id,
-                    "audio_s": round(duracao_s, 2),
-                    "fim_escuta": turno.fim_escuta,
-                    "frases": len(turno.frases),
-                    "memoria": turno.memoria,
-                    "emocoes": turno.emocoes,
-                    "ms": medidas,
-                },
-                ensure_ascii=False,
-            ),
-        )
-        log.debug("sessão %s: %r → %r", self.id, turno.texto_usuario, turno.resposta)
+            ms["fala_ate_primeiro_audio"] = ms["vad"] + ms["primeiro_envio"]
+        return {
+            "sessao": self.id,
+            "tablet": self.device_id,
+            "audio_s": round(duracao_s, 2),
+            "fim_escuta": turno.fim_escuta,
+            "frases": len(turno.frases),
+            "memoria": turno.memoria,
+            "emocoes": turno.emocoes,
+            "ms": ms,
+        }
+
+    def _registrar_falha(self, turno: Turno, duracao_s: float, erro: BaseException) -> None:
+        dados = self._medidas(turno, duracao_s)
+        registro.registrar("falha", etapa=turno.etapa, erro=type(erro).__name__, **dados)

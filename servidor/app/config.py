@@ -7,6 +7,7 @@ from pathlib import Path
 RAIZ_REPOSITORIO = Path(__file__).resolve().parents[2]
 SERVIDOR = RAIZ_REPOSITORIO / "servidor"
 MODELOS = RAIZ_REPOSITORIO / "modelos"
+_PASTA_ESTADO = Path(os.environ.get("XDG_STATE_HOME") or Path.home() / ".local" / "state")
 
 
 @dataclass(frozen=True)
@@ -41,6 +42,10 @@ class Config:
     vad_limiar: float
     vad_silencio_s: float  # silêncio que encerra a fala
     vad_sem_fala_s: float  # escuta sem nenhuma fala que volta a ocioso
+
+    # Registro dos turnos (só tempos e contagens), em arquivo rotacionado diariamente
+    log_pasta: Path
+    log_dias: int  # arquivos antigos guardados
 
     # Como a escuta começa: "toque" (listen_start) ou "palavra" ("Pegasus", em escuta contínua)
     ativacao: str
@@ -95,6 +100,8 @@ def carregar_config(ambiente: dict[str, str] | None = None) -> Config:
         vad_limiar=float(env.get("PEGASUS_VAD_LIMIAR", "0.5")),
         vad_silencio_s=int(env.get("PEGASUS_VAD_SILENCIO_MS", "600")) / 1000,
         vad_sem_fala_s=int(env.get("PEGASUS_VAD_SEM_FALA_MS", "8000")) / 1000,
+        log_pasta=Path(env.get("PEGASUS_LOG_PASTA", str(_PASTA_ESTADO / "robo-pegasus"))),
+        log_dias=int(env.get("PEGASUS_LOG_DIAS", "30")),
         ativacao=_modo_ativacao(env.get("PEGASUS_ATIVACAO", "toque")),
         api_host=env.get("PEGASUS_HOST", "127.0.0.1"),
         api_porta=int(env.get("PEGASUS_PORTA_API", "8100")),
@@ -116,6 +123,7 @@ def resumo_publico(config: Config) -> dict[str, object]:
         "persona": str(config.persona_arquivo),
         "vad_silencio_ms": round(config.vad_silencio_s * 1000),
         "memoria_turnos": config.memoria_turnos,
+        "log_turnos": f"{config.log_pasta} ({config.log_dias} dias)",
         "whisper": f"{config.whisper_modelo}, {whisper}, {config.whisper_precisao}",
     }
     if config.emocao_modo == "paralelo":

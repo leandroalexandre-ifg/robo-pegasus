@@ -18,7 +18,7 @@ TAXA = 22_050
 
 
 @pytest.fixture
-def pipeline(monkeypatch):
+def pipeline(monkeypatch, tmp_path):
     """Substitui Whisper, LLM e Piper por falsos; devolve o que eles recebem."""
     estado = {
         "transcricao": "qual é o seu nome?",
@@ -45,6 +45,8 @@ def pipeline(monkeypatch):
         return b"\x01\x00" * int(TAXA * 0.25), TAXA  # 250 ms → 3 blocos de até 100 ms
 
     monkeypatch.setenv("PEGASUS_TOKENS", f"outro,{TOKEN}")
+    monkeypatch.setenv("PEGASUS_LOG_PASTA", str(tmp_path))
+    estado["turnos"] = tmp_path / "turnos.jsonl"
     monkeypatch.setattr(main, "preparar_modelos", preparar_modelos)
     monkeypatch.setattr(stt, "transcrever", transcrever)
     monkeypatch.setattr(llm, "gerar", gerar)
@@ -503,3 +505,57 @@ def test_silencio_longo_antes_da_fala_nao_acumula_audio(escuta_continua, pipelin
         assert ws.receive_json() == {"type": "state", "state": "pensando"}
     # só a fala e as margens, mesmo depois de 6 s de silêncio guardado e cortado
     assert pipeline["transcritos"] == [pytest.approx(1.5)]
+
+
+def _registros(pipeline):
+    linhas = pipeline["turnos"].read_text().splitlines()
+    return [json.loads(linha) for linha in linhas]
+
+
+def test_turno_registra_tempos_sem_texto(cliente, pipeline, caplog):
+    caplog.set_level("DEBUG")
+    with cliente.websocket_connect("/ws") as ws:
+        _conectar(ws)
+        _falar(ws)
+        _receber_ate_ocioso(ws)
+    [r] = _registros(pipeline)
+    assert r["tipo"] == "turno"
+    assert r["frases"] == 2
+    assert {"stt", "primeiro_envio", "vad"} <= set(r["ms"])
+    texto_do_arquivo = pipeline["turnos"].read_text()
+    for trecho in ("nome", "Olá", "Pegasus"):  # fala do usuário e resposta
+        assert trecho not in texto_do_arquivo
+        assert trecho not in caplog.text
+
+
+def test_falha_registra_a_etapa(cliente, pipeline):
+    pipeline["pedacos"] = [openai.APIConnectionError(request=httpx.Request("POST", "http://x"))]
+    with cliente.websocket_connect("/ws") as ws:
+        _conectar(ws)
+        _falar(ws)
+        _receber_ate_ocioso(ws)
+    [r] = _registros(pipeline)
+    assert (r["tipo"], r["etapa"], r["erro"]) == ("falha", "stt", "APIConnectionError")
+
+
+def test_fala_descartada_nao_entra_no_registro(escuta_continua, pipeline):
+    pipeline["falas"].append("conversa particular")
+    with escuta_continua.websocket_connect("/ws") as ws:
+        _conectar_continuo(ws)
+        _enviar_audio(ws, 3.0)
+        _nada_mais_foi_enviado(ws)
+    assert pipeline["turnos"].read_text() == ""
+
+
+def test_ativacao_registra_o_oi(escuta_continua, pipeline):
+    pipeline["falas"].append("Pegasus")
+    with escuta_continua.websocket_connect("/ws") as ws:
+        _conectar_continuo(ws)
+        _enviar_audio(ws, 2.2)
+        while (m := ws.receive()).get("text") is None or json.loads(m["text"]).get("state") != (
+            "ouvindo"
+        ):
+            pass
+    [r] = _registros(pipeline)
+    assert r["tipo"] == "ativacao"
+    assert r["audio_s"] == pytest.approx(1.5)
