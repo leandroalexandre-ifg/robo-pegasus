@@ -8,6 +8,7 @@ import numpy as np
 
 from app.config import Config
 from app.pipeline import llm, stt, tts
+from app.pipeline.emocao import Emocao, limpar_para_voz
 from app.pipeline.frases import cortar_frases
 
 
@@ -25,6 +26,7 @@ class Turno:
 
     texto_usuario: str = ""
     frases: list[str] = field(default_factory=list)
+    emocoes: list[str] = field(default_factory=list)
     tempos: dict[str, float] = field(default_factory=dict)
     tts_s: float = 0.0  # soma do tempo do Piper em todas as frases
     _inicio: float = field(default_factory=time.perf_counter, repr=False)
@@ -38,9 +40,10 @@ class Turno:
         return " ".join(self.frases)
 
 
-async def _pedacos_medidos(texto: str, config: Config, turno: Turno) -> AsyncIterator[str]:
+async def _pedacos_medidos(texto: str, config: Config, turno: Turno) -> AsyncIterator[str | Emocao]:
     async for pedaco in llm.gerar(texto, config):
-        turno.marcar("llm_primeiro_token")
+        if isinstance(pedaco, str):
+            turno.marcar("llm_primeiro_token")
         yield pedaco
     turno.marcar("llm_fim")
 
@@ -51,11 +54,20 @@ async def transcrever(audio: np.ndarray, config: Config, turno: Turno) -> str:
     return turno.texto_usuario
 
 
-async def falar(texto: str, config: Config, turno: Turno) -> AsyncIterator[BlocoAudio]:
-    """Gera a resposta ao texto do usuário, um bloco de áudio por frase."""
+async def falar(texto: str, config: Config, turno: Turno) -> AsyncIterator[BlocoAudio | Emocao]:
+    """Gera a resposta ao texto do usuário: um bloco de áudio por frase e as
+    emoções pedidas pelo LLM, assim que chegam."""
     # Enquanto o Piper sintetiza uma frase, o vLLM continua gerando: os tokens
     # ficam no buffer da conexão até o laço voltar a ler.
-    async for frase in cortar_frases(_pedacos_medidos(texto, config, turno)):
+    async for item in cortar_frases(_pedacos_medidos(texto, config, turno)):
+        if isinstance(item, Emocao):
+            turno.marcar("emocao")
+            turno.emocoes.append(item.nome)
+            yield item
+            continue
+        frase = limpar_para_voz(item)  # a voz nunca lê marcações
+        if not frase:
+            continue
         turno.marcar("llm_primeira_frase")
         t = time.perf_counter()
         pcm, taxa = await tts.sintetizar(frase, config)
@@ -66,8 +78,10 @@ async def falar(texto: str, config: Config, turno: Turno) -> AsyncIterator[Bloco
     turno.marcar("fim")
 
 
-async def conversar(audio: np.ndarray, config: Config, turno: Turno) -> AsyncIterator[BlocoAudio]:
-    """Transcreve o áudio e devolve a resposta falada, um bloco por frase."""
+async def conversar(
+    audio: np.ndarray, config: Config, turno: Turno
+) -> AsyncIterator[BlocoAudio | Emocao]:
+    """Transcreve o áudio e devolve a resposta falada, um bloco por frase, e as emoções."""
     if await transcrever(audio, config, turno):
         async for bloco in falar(turno.texto_usuario, config, turno):
             yield bloco

@@ -38,6 +38,7 @@ Tablet                                   Servidor
   │ ◄─────────────── tts_start {frase} ─── │   ┐
   │ ◄══════════════ áudio PCM da frase ═══ │   │ uma vez por frase
   │ ◄──────────────────────── tts_end ──── │   ┘
+  │ ◄──────────── emotion {"feliz"} ────── │   (a qualquer momento entre stt e ocioso)
   │ ◄───────────────── state "ocioso" ──── │
 ```
 
@@ -164,13 +165,18 @@ Fim do áudio da frase. Pode vir outra frase (`tts_start`) ou `state "ocioso"`.
 
 Falha no turno (por exemplo, LLM desligado). A mensagem é em português e pode ser exibida ou falada. O servidor volta a `ocioso` em seguida; a conexão continua aberta.
 
-### `emotion` (planejada)
+### `emotion`
 
 ```json
 {"type": "emotion", "emotion": "feliz"}
 ```
 
-Ainda não implementada. Virá da ferramenta `definir_emocao` do LLM. Emoções: `neutro`, `feliz`, `triste`, `surpreso`, `pensativo`, `bravo`.
+Emoção a sobrepor ao estado do rosto. Valores: `neutro`, `feliz`, `triste`, `surpreso`, `pensativo`, `bravo`.
+
+- Vem da ferramenta `definir_emocao(emocao)` do LLM. O servidor valida o valor e descarta emoções fora da lista.
+- Pode chegar a qualquer momento entre `stt` e `state "ocioso"`: durante `pensando` (se o LLM escolher a emoção antes de falar) ou no meio de `falando` (se escolher depois do texto, como o prompt atual pede). Pode haver mais de uma por turno; vale a mais recente.
+- A emoção vale até a próxima `emotion` ou até o fim do turno: ao receber `state "ocioso"` o app volta o rosto a `neutro`. Um turno sem `emotion` é exibido como `neutro`.
+- O texto de `tts_start` e o áudio nunca contêm marcações de emoção nem de ferramenta: o servidor remove do texto chamadas `<tool_call>`, marcas como `[feliz]` ou `*sorri*`, emojis e símbolos de markdown antes da síntese.
 
 ## Fechamento
 

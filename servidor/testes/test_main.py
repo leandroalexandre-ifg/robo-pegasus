@@ -9,6 +9,7 @@ from starlette.websockets import WebSocketDisconnect
 
 from app import main
 from app.pipeline import llm, stt, tts
+from app.pipeline.emocao import Emocao
 
 TOKEN = "token-de-teste"
 TAXA = 22_050
@@ -196,3 +197,16 @@ def test_token_valido():
     assert not main.token_valido("c", frozenset({"a", "b"}))
     assert not main.token_valido(123, frozenset({"a"}))
     assert not main.token_valido("a", frozenset())
+
+
+def test_emocao_e_enviada_ao_tablet(cliente, pipeline):
+    pipeline["pedacos"] = ["Que notícia ", "boa! ", Emocao("feliz"), "Parabéns."]
+    with cliente.websocket_connect("/ws") as ws:
+        _conectar(ws)
+        _falar(ws)
+        recebidas = _receber_ate_ocioso(ws)
+    frase = ["tts_start", "audio", "audio", "audio", "tts_end"]
+    assert _tipos(recebidas) == ["pensando", "stt", "falando", *frase, "emotion", *frase, "ocioso"]
+    assert {"type": "emotion", "emotion": "feliz"} in recebidas
+    textos = [m["text"] for m in recebidas if isinstance(m, dict) and m["type"] == "tts_start"]
+    assert textos == ["Que notícia boa!", "Parabéns."]

@@ -77,6 +77,7 @@ async def principal(url: str, entrada: Path, saida: Path, tempo_real: bool) -> i
 
         tempos: dict[str, float] = {}
         frases: list[str] = []
+        emocoes: list[str] = []
         audio = bytearray()
         reconhecido = None
         while True:
@@ -93,6 +94,9 @@ async def principal(url: str, entrada: Path, saida: Path, tempo_real: bool) -> i
             elif tipo == "tts_start":
                 tempos.setdefault("primeira_frase", agora())
                 frases.append(mensagem["text"])
+            elif tipo == "emotion":
+                tempos.setdefault("emocao", agora())
+                emocoes.append(mensagem["emotion"])
             elif tipo == "error":
                 print(f"Erro do servidor: {mensagem['message']}")
             elif tipo == "state" and mensagem["state"] == "ocioso":
@@ -104,6 +108,7 @@ async def principal(url: str, entrada: Path, saida: Path, tempo_real: bool) -> i
         print("Nenhum áudio de resposta.")
         return 1
     print(f"Resposta:    {' '.join(frases)}")
+    print(f"Emoção:      {', '.join(emocoes) or '(nenhuma)'}")
     escrever_wav(saida, bytes(audio), taxa)
 
     print()
@@ -116,6 +121,7 @@ async def principal(url: str, entrada: Path, saida: Path, tempo_real: bool) -> i
     print(f"stt recebido:            {ms(tempos.get('stt'))}")
     print(f"primeiro tts_start:      {ms(tempos.get('primeira_frase'))}")
     print(f"Primeiro áudio:          {ms(tempos.get('primeiro_audio'))}   ← meta: 1500 ms")
+    print(f"emotion recebida:        {ms(tempos.get('emocao'))}")
     print(f"Fim (estado ocioso):     {ms(tempos.get('fim'))}")
     print(f"Resposta salva em {saida}")
     return 0
