@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 
 import 'config/config.dart';
 import 'config/tela_config.dart';
+import 'demo.dart';
 import 'robo.dart';
 import 'rosto/estado_rosto.dart';
 import 'rosto/rosto.dart';
@@ -14,15 +15,19 @@ Future<void> main() async {
     DeviceOrientation.landscapeRight,
   ]);
   await SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
+  if (modoDemo) {
+    runApp(const AppPegasus(home: TelaDemo()));
+    return;
+  }
   final robo = Robo(await Config.carregar());
-  runApp(AppPegasus(robo: robo));
+  runApp(AppPegasus(home: TelaRosto(robo: robo)));
   await robo.iniciar();
 }
 
 class AppPegasus extends StatelessWidget {
-  const AppPegasus({super.key, required this.robo});
+  const AppPegasus({super.key, required this.home});
 
-  final Robo robo;
+  final Widget home;
 
   @override
   Widget build(BuildContext context) {
@@ -34,7 +39,7 @@ class AppPegasus extends StatelessWidget {
         scaffoldBackgroundColor: Colors.black,
         colorSchemeSeed: EstadoRosto.ocioso.cor,
       ),
-      home: TelaRosto(robo: robo),
+      home: home,
     );
   }
 }
