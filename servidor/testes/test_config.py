@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from app.config import MODELOS, carregar_config
+from app.config import MODELOS, carregar_config, resumo_publico
 
 
 def test_padroes():
@@ -51,3 +51,25 @@ def test_modo_da_emocao():
     assert carregar_config({"PEGASUS_EMOCAO_MODO": "paralelo"}).emocao_modo == "paralelo"
     with pytest.raises(ValueError, match="PEGASUS_EMOCAO_MODO"):
         carregar_config({"PEGASUS_EMOCAO_MODO": "depois"})
+
+
+def test_resumo_publico_sem_segredos():
+    c = carregar_config(
+        {
+            "PEGASUS_TOKENS": "segredo-tablet",
+            "PEGASUS_LLM_CHAVE": "segredo-llm",
+            "PEGASUS_MODELO": "qwen-teste",
+            "PEGASUS_EMOCAO_MODO": "paralelo",
+        }
+    )
+    resumo = resumo_publico(c)
+    assert resumo == {
+        "emocao_modo": "paralelo",
+        "llm_modelo": "qwen-teste",
+        "api": "127.0.0.1:8100",
+        "voz": "pt_BR-faber-medium",
+        "whisper": "large-v3-turbo, cuda (GPU1), float16",
+        "emocao_espera_ms": 1000,
+    }
+    assert "segredo" not in repr(resumo)
+    assert "emocao_espera_ms" not in resumo_publico(carregar_config({}))

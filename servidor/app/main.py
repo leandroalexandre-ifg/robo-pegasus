@@ -16,7 +16,7 @@ from contextlib import asynccontextmanager
 import numpy as np
 from fastapi import FastAPI, WebSocket
 
-from app.config import Config, carregar_config
+from app.config import Config, carregar_config, resumo_publico
 from app.pipeline import stt, tts
 from app.sessao import Sessao
 from app.wav import TAXA_ENTRADA
@@ -50,6 +50,7 @@ async def lifespan(app: FastAPI):
     config = carregar_config()
     if not config.tokens:
         log.warning("PEGASUS_TOKENS vazio: todas as conexões serão recusadas.")
+    log.info("configuração: %s", json.dumps(resumo_publico(config), ensure_ascii=False))
     app.state.config = config
     app.state.taxa_saida = await preparar_modelos(config)
     log.info("modelos prontos; áudio de saída a %d Hz", app.state.taxa_saida)

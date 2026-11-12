@@ -72,3 +72,20 @@ def carregar_config(ambiente: dict[str, str] | None = None) -> Config:
         api_porta=int(env.get("PEGASUS_PORTA_API", "8100")),
         tokens=frozenset(t.strip() for t in env.get("PEGASUS_TOKENS", "").split(",") if t.strip()),
     )
+
+
+def resumo_publico(config: Config) -> dict[str, object]:
+    """Configuração que pode ir para o log: sem tokens nem chaves."""
+    whisper = config.whisper_dispositivo
+    if whisper == "cuda":
+        whisper = f"cuda (GPU{config.whisper_gpu})"
+    resumo: dict[str, object] = {
+        "emocao_modo": config.emocao_modo,
+        "llm_modelo": config.llm_modelo or "(primeiro de /v1/models)",
+        "api": f"{config.api_host}:{config.api_porta}",
+        "voz": config.piper_voz.stem,
+        "whisper": f"{config.whisper_modelo}, {whisper}, {config.whisper_precisao}",
+    }
+    if config.emocao_modo == "paralelo":
+        resumo["emocao_espera_ms"] = round(config.emocao_espera_s * 1000)
+    return resumo
