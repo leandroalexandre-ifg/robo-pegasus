@@ -1,10 +1,13 @@
-"""Cliente de teste do WebSocket: envia um WAV como se fosse o tablet e salva a resposta.
+"""Cliente de teste do WebSocket: envia WAVs como se fosse o tablet e salva as respostas.
 
 Uso, a partir de servidor/, com o servidor (python -m app.main) e o vLLM ligados:
 
     set -a; . ~/.config/robo-pegasus/pegasus.env; set +a
     ../.venv/bin/python -m scripts.cliente_ws entrada.wav -o resposta.wav
+    ../.venv/bin/python -m scripts.cliente_ws --vad um.wav dois.wav  # conversa sem listen_stop
+    ../.venv/bin/python -m scripts.cliente_ws --abortar entrada.wav   # abort no primeiro áudio
 
+Vários WAVs são turnos da mesma conexão (a memória da sessão vale entre eles).
 O token vem de PEGASUS_TOKEN ou, na falta dele, do primeiro de PEGASUS_TOKENS.
 """
 
@@ -22,6 +25,7 @@ from websockets.exceptions import ConnectionClosed
 from app.wav import escrever_wav, ler_wav
 
 BLOCO_ENTRADA = 640  # 20 ms de PCM 16 kHz, 16 bits
+SILENCIO_APOS_FALA_S = 3.0  # modo --vad: silêncio enviado depois da fala, até o servidor decidir
 
 
 def ms(segundos: float | None) -> str:
@@ -42,9 +46,100 @@ async def esperar_estado(ws, estado: str) -> None:
             return
 
 
-async def principal(url: str, entrada: Path, saida: Path, tempo_real: bool) -> int:
-    pcm_entrada = (ler_wav(entrada) * 32768).clip(-32768, 32767).astype("<i2").tobytes()
+async def _enviar_fala(ws, pcm: bytes, tempo_real: bool, vad: bool, parar: asyncio.Event) -> float:
+    """Envia a fala em blocos de 20 ms; devolve o instante em que ela terminou.
 
+    No modo --vad, segue enviando silêncio (como um microfone aberto) até o servidor
+    encerrar a escuta, sem listen_stop."""
+    for i in range(0, len(pcm), BLOCO_ENTRADA):
+        await ws.send(pcm[i : i + BLOCO_ENTRADA])
+        if tempo_real or vad:
+            await asyncio.sleep(0.02)
+    fim_da_fala = time.perf_counter()
+    if not vad:
+        await ws.send(json.dumps({"type": "listen_stop"}))
+        return fim_da_fala
+    silencio = b"\x00" * BLOCO_ENTRADA
+    for _ in range(int(SILENCIO_APOS_FALA_S / 0.02)):
+        if parar.is_set():
+            break
+        await ws.send(silencio)
+        await asyncio.sleep(0.02)
+    return fim_da_fala
+
+
+async def turno(ws, entrada: Path, saida: Path, args, taxa: int) -> int:
+    pcm_entrada = (ler_wav(entrada) * 32768).clip(-32768, 32767).astype("<i2").tobytes()
+    await ws.send(json.dumps({"type": "listen_start"}))
+    await esperar_estado(ws, "ouvindo")
+
+    parar = asyncio.Event()
+    envio = asyncio.create_task(_enviar_fala(ws, pcm_entrada, args.tempo_real, args.vad, parar))
+    recebido: dict[str, float] = {}
+    frases: list[str] = []
+    emocoes: list[str] = []
+    audio = bytearray()
+    reconhecido = None
+    abortou = None
+
+    while True:
+        quadro = await asyncio.wait_for(ws.recv(), 60)
+        instante = time.perf_counter()
+        if isinstance(quadro, bytes):
+            recebido.setdefault("primeiro_audio", instante)
+            audio += quadro
+            if args.abortar and abortou is None:
+                abortou = time.perf_counter()
+                await ws.send(json.dumps({"type": "abort"}))
+            continue
+        mensagem = json.loads(quadro)
+        tipo = mensagem.get("type")
+        if tipo == "state" and mensagem["state"] in ("pensando", "ocioso"):
+            parar.set()  # o servidor encerrou a escuta: o microfone fecha
+        if tipo == "state" and mensagem["state"] == "pensando":
+            recebido.setdefault("pensando", instante)
+        elif tipo == "stt":
+            recebido["stt"] = instante
+            reconhecido = mensagem["text"]
+        elif tipo == "tts_start":
+            recebido.setdefault("primeira_frase", instante)
+            frases.append(mensagem["text"])
+        elif tipo == "emotion":
+            recebido.setdefault("emocao", instante)
+            emocoes.append(mensagem["emotion"])
+        elif tipo == "error":
+            print(f"Erro do servidor: {mensagem['message']}")
+        elif tipo == "state" and mensagem["state"] == "ocioso":
+            recebido["fim"] = instante
+            break
+    fim_da_fala = await envio
+
+    print(f"Reconhecido: {reconhecido or '(nada)'}")
+    print(f"Resposta:    {' '.join(frases) or '(nenhuma)'}")
+    print(f"Emoção:      {', '.join(emocoes) or '(nenhuma)'}")
+    if audio:
+        escrever_wav(saida, bytes(audio), taxa)
+
+    def desde_fala(chave: str) -> str:
+        return ms(recebido[chave] - fim_da_fala if chave in recebido else None)
+
+    modo = "VAD, sem listen_stop" if args.vad else "listen_stop"
+    print(f"Tempos desde o fim da fala ({modo}), vistos pelo cliente:")
+    if args.vad:
+        print(f"escuta encerrada:        {desde_fala('pensando')}")
+    print(f"stt recebido:            {desde_fala('stt')}")
+    print(f"emotion recebida:        {desde_fala('emocao')}")
+    print(f"Primeiro áudio:          {desde_fala('primeiro_audio')}   ← meta: 1500 ms")
+    if abortou is not None:
+        print(f"abort → ocioso:          {ms(recebido['fim'] - abortou)}")
+    else:
+        print(f"Fim (estado ocioso):     {desde_fala('fim')}")
+    if audio:
+        print(f"Resposta salva em {saida}")
+    return 0 if audio else 1
+
+
+async def principal(url: str, args) -> int:
     async with connect(url, max_size=2**22) as ws:
         await ws.send(
             json.dumps(
@@ -62,83 +157,34 @@ async def principal(url: str, entrada: Path, saida: Path, tempo_real: bool) -> i
         print(f"Conectado: sessão {hello['session_id']}, áudio de saída a {taxa} Hz")
         await esperar_estado(ws, "ocioso")
 
-        await ws.send(json.dumps({"type": "listen_start"}))
-        await esperar_estado(ws, "ouvindo")
-        for i in range(0, len(pcm_entrada), BLOCO_ENTRADA):
-            await ws.send(pcm_entrada[i : i + BLOCO_ENTRADA])
-            if tempo_real:
-                await asyncio.sleep(0.02)
-
-        inicio = time.perf_counter()  # marco zero: fim da fala
-        await ws.send(json.dumps({"type": "listen_stop"}))
-
-        def agora() -> float:
-            return time.perf_counter() - inicio
-
-        tempos: dict[str, float] = {}
-        frases: list[str] = []
-        emocoes: list[str] = []
-        audio = bytearray()
-        reconhecido = None
-        while True:
-            quadro = await asyncio.wait_for(ws.recv(), 60)
-            if isinstance(quadro, bytes):
-                tempos.setdefault("primeiro_audio", agora())
-                audio += quadro
-                continue
-            mensagem = json.loads(quadro)
-            tipo = mensagem.get("type")
-            if tipo == "stt":
-                tempos["stt"] = agora()
-                reconhecido = mensagem["text"]
-            elif tipo == "tts_start":
-                tempos.setdefault("primeira_frase", agora())
-                frases.append(mensagem["text"])
-            elif tipo == "emotion":
-                tempos.setdefault("emocao", agora())
-                emocoes.append(mensagem["emotion"])
-            elif tipo == "error":
-                print(f"Erro do servidor: {mensagem['message']}")
-            elif tipo == "state" and mensagem["state"] == "ocioso":
-                tempos["fim"] = agora()
-                break
-
-    print(f"Reconhecido: {reconhecido or '(nada)'}")
-    if not audio:
-        print("Nenhum áudio de resposta.")
-        return 1
-    print(f"Resposta:    {' '.join(frases)}")
-    print(f"Emoção:      {', '.join(emocoes) or '(nenhuma)'}")
-    escrever_wav(saida, bytes(audio), taxa)
-
-    print()
-    print(
-        f"Áudio de entrada: {len(pcm_entrada) / 32000:.2f} s"
-        f"{' (enviado em tempo real)' if tempo_real else ''}"
-        f"   áudio de saída: {len(audio) / 2 / taxa:.2f} s   frases: {len(frases)}"
-    )
-    print("Tempos contados do envio do listen_stop, vistos pelo cliente:")
-    print(f"stt recebido:            {ms(tempos.get('stt'))}")
-    print(f"primeiro tts_start:      {ms(tempos.get('primeira_frase'))}")
-    print(f"Primeiro áudio:          {ms(tempos.get('primeiro_audio'))}   ← meta: 1500 ms")
-    print(f"emotion recebida:        {ms(tempos.get('emocao'))}")
-    print(f"Fim (estado ocioso):     {ms(tempos.get('fim'))}")
-    print(f"Resposta salva em {saida}")
-    return 0
+        codigo = 0
+        for n, entrada in enumerate(args.entradas, 1):
+            saida = args.saida
+            if len(args.entradas) > 1:
+                saida = saida.with_stem(f"{saida.stem}_{n}")
+                print(f"\n===== turno {n}: {entrada.name}")
+            codigo |= await turno(ws, entrada, saida, args, taxa)
+        return codigo
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Envia um WAV ao servidor como se fosse o tablet.")
-    parser.add_argument("entrada", type=Path, help="WAV 16 kHz, mono, 16 bits")
+    parser = argparse.ArgumentParser(description="Envia WAVs ao servidor como se fosse o tablet.")
+    parser.add_argument("entradas", type=Path, nargs="+", help="WAV 16 kHz, mono, 16 bits")
     parser.add_argument("-o", "--saida", type=Path, default=Path("resposta_ws.wav"))
     parser.add_argument("--url", default=None, help="padrão: ws://127.0.0.1:PEGASUS_PORTA_API/ws")
     parser.add_argument(
         "--tempo-real", action="store_true", help="envia o áudio no ritmo da fala (20 ms por bloco)"
     )
+    parser.add_argument(
+        "--vad",
+        action="store_true",
+        help="fala no ritmo real e espera o VAD do servidor encerrar a escuta (sem listen_stop)",
+    )
+    parser.add_argument("--abortar", action="store_true", help="envia abort no primeiro áudio")
     args = parser.parse_args()
     url = args.url or f"ws://127.0.0.1:{os.environ.get('PEGASUS_PORTA_API', '8100')}/ws"
     try:
-        codigo = asyncio.run(principal(url, args.entrada, args.saida, args.tempo_real))
+        codigo = asyncio.run(principal(url, args))
     except ConnectionClosed as e:
         sys.exit(f"Conexão fechada pelo servidor: {e.code} {e.reason}")
     except OSError as e:
