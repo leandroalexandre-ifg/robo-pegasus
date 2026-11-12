@@ -7,8 +7,8 @@ from contextlib import aclosing
 
 from openai import AsyncOpenAI
 
+from app import persona
 from app.config import Config
-from app.persona import PROMPT_EMOCAO, PROMPT_SISTEMA
 from app.pipeline.emocao import FERRAMENTA, Emocao, cortar_marcacoes, emocao_da_chamada
 
 log = logging.getLogger("pegasus.llm")
@@ -30,7 +30,7 @@ async def _preparar(config: Config) -> tuple[AsyncOpenAI, str]:
     return _cliente, _modelo
 
 
-def _mensagens(texto_usuario: str, sistema: str = PROMPT_SISTEMA) -> list[dict]:
+def _mensagens(texto_usuario: str, sistema: str) -> list[dict]:
     return [
         {"role": "system", "content": sistema},
         {"role": "user", "content": texto_usuario},
@@ -118,12 +118,15 @@ async def gerar(texto_usuario: str, config: Config) -> AsyncIterator[str | Emoca
     cliente, modelo = await _preparar(config)
     if config.emocao_modo == "paralelo":
         async for pedaco in _texto_limpo(
-            _fluxo(cliente, modelo, _mensagens(texto_usuario), config)
+            _fluxo(
+                cliente, modelo, _mensagens(texto_usuario, persona.prompt_sistema(config)), config
+            )
         ):
             yield pedaco
         return
 
-    mensagens = _mensagens(texto_usuario, f"{PROMPT_SISTEMA}\n{PROMPT_EMOCAO}")
+    sistema = f"{persona.prompt_sistema(config)}\n{persona.PROMPT_EMOCAO}"
+    mensagens = _mensagens(texto_usuario, sistema)
     chamadas: dict[int, dict] = {}
     falou = False
     async for pedaco in _texto_limpo(_fluxo(cliente, modelo, mensagens, config, chamadas)):
@@ -150,7 +153,7 @@ async def escolher_emocao(texto_usuario: str, config: Config) -> Emocao | None:
     cliente, modelo = await _preparar(config)
     resposta = await cliente.chat.completions.create(
         model=modelo,
-        messages=_mensagens(texto_usuario),
+        messages=_mensagens(texto_usuario, persona.prompt_sistema(config)),
         tools=[FERRAMENTA],
         tool_choice={"type": "function", "function": {"name": FERRAMENTA["function"]["name"]}},
         # O Qwen3.8 escreve a chamada no formato XML: ~32 tokens.

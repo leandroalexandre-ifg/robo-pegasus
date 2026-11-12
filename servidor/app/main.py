@@ -16,6 +16,7 @@ from contextlib import asynccontextmanager
 import numpy as np
 from fastapi import FastAPI, WebSocket
 
+from app import persona
 from app.config import Config, carregar_config, resumo_publico
 from app.pipeline import stt, tts, vad
 from app.sessao import Sessao
@@ -52,6 +53,8 @@ async def lifespan(app: FastAPI):
     if not config.tokens:
         log.warning("PEGASUS_TOKENS vazio: todas as conexões serão recusadas.")
     log.info("configuração: %s", json.dumps(resumo_publico(config), ensure_ascii=False))
+    p = persona.carregar(config.persona_arquivo)
+    log.info("persona: %s (%d frases no máximo)", p.nome, p.frases_max)
     app.state.config = config
     app.state.taxa_saida = await preparar_modelos(config)
     log.info("modelos prontos; áudio de saída a %d Hz", app.state.taxa_saida)

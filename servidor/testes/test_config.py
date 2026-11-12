@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from app.config import MODELOS, carregar_config, resumo_publico
+from app.config import MODELOS, SERVIDOR, carregar_config, resumo_publico
 
 
 def test_padroes():
@@ -68,6 +68,7 @@ def test_resumo_publico_sem_segredos():
         "llm_modelo": "qwen-teste",
         "api": "127.0.0.1:8100",
         "voz": "pt_BR-faber-medium",
+        "persona": str(SERVIDOR / "persona.toml"),
         "vad_silencio_ms": 600,
         "whisper": "large-v3-turbo, cuda (GPU1), float16",
         "emocao_espera_ms": 1000,

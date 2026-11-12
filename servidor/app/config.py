@@ -5,6 +5,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 RAIZ_REPOSITORIO = Path(__file__).resolve().parents[2]
+SERVIDOR = RAIZ_REPOSITORIO / "servidor"
 MODELOS = RAIZ_REPOSITORIO / "modelos"
 
 
@@ -31,6 +32,9 @@ class Config:
 
     # Piper
     piper_voz: Path
+
+    # Persona (arquivo TOML editável, lido na subida)
+    persona_arquivo: Path
 
     # Silero VAD: fim da fala sem listen_stop
     vad_limiar: float
@@ -73,6 +77,7 @@ def carregar_config(ambiente: dict[str, str] | None = None) -> Config:
         piper_voz=Path(
             env.get("PEGASUS_PIPER_VOZ", str(MODELOS / "piper" / "pt_BR-faber-medium.onnx"))
         ),
+        persona_arquivo=Path(env.get("PEGASUS_PERSONA", str(SERVIDOR / "persona.toml"))),
         vad_limiar=float(env.get("PEGASUS_VAD_LIMIAR", "0.5")),
         vad_silencio_s=int(env.get("PEGASUS_VAD_SILENCIO_MS", "600")) / 1000,
         vad_sem_fala_s=int(env.get("PEGASUS_VAD_SEM_FALA_MS", "8000")) / 1000,
@@ -92,6 +97,7 @@ def resumo_publico(config: Config) -> dict[str, object]:
         "llm_modelo": config.llm_modelo or "(primeiro de /v1/models)",
         "api": f"{config.api_host}:{config.api_porta}",
         "voz": config.piper_voz.stem,
+        "persona": str(config.persona_arquivo),
         "vad_silencio_ms": round(config.vad_silencio_s * 1000),
         "whisper": f"{config.whisper_modelo}, {whisper}, {config.whisper_precisao}",
     }
