@@ -284,7 +284,7 @@ class Sessao:
 
     def _lembrar(self, turno: Turno) -> None:
         # Guarda o que o robô chegou a dizer, mesmo se o turno foi interrompido.
-        if turno.texto_usuario and turno.frases:
+        if turno.texto_usuario and turno.frases and not turno.reserva:
             self.historico.append((turno.texto_usuario, turno.resposta))
 
     async def _responder(self, pcm: bytes, turno: Turno, texto: str | None = None) -> None:

@@ -688,3 +688,45 @@ def test_status_mostra_llm_sessoes_e_latencia(cliente, pipeline):
 def test_status_recusa_quem_nao_e_local(pipeline):
     with TestClient(main.app, client=("10.0.0.5", 5000)) as c:
         assert c.get("/status").status_code == 404
+
+
+def _llm_em_sequencia(monkeypatch, *respostas):
+    """Cada chamada ao LLM devolve a próxima lista de pedaços (a última se repete)."""
+    chamadas = []
+
+    async def gerar(texto, config, historico=()):
+        chamadas.append(list(historico))
+        for p in respostas[min(len(chamadas), len(respostas)) - 1]:
+            yield p
+
+    monkeypatch.setattr(llm, "gerar", gerar)
+    return chamadas
+
+
+def test_llm_mudo_uma_vez_repete_o_pedido(cliente, pipeline, monkeypatch):
+    chamadas = _llm_em_sequencia(monkeypatch, [], ["Oito pernas."])
+    with cliente.websocket_connect("/ws") as ws:
+        _conectar(ws)
+        _falar(ws)
+        recebidas = _receber_ate_ocioso(ws)
+    falas = [m["text"] for m in recebidas if isinstance(m, dict) and m["type"] == "tts_start"]
+    assert falas == ["Oito pernas."]
+    assert len(chamadas) == 2
+    [r] = _registros(pipeline)
+    assert "llm_repeticao" in r["ms"]
+
+
+def test_llm_mudo_sempre_usa_a_fala_de_reserva(cliente, pipeline, monkeypatch):
+    from app.pipeline.turno import FALA_RESERVA
+
+    chamadas = _llm_em_sequencia(monkeypatch, [])
+    with cliente.websocket_connect("/ws") as ws:
+        _conectar(ws)
+        _falar(ws)
+        recebidas = _receber_ate_ocioso(ws)
+        _turno(ws, "de novo", pipeline)
+    tipos = _tipos(recebidas)
+    assert tipos.index("emotion") < tipos.index("tts_start")
+    falas = [m["text"] for m in recebidas if isinstance(m, dict) and m["type"] == "tts_start"]
+    assert falas == [FALA_RESERVA]
+    assert chamadas[-1] == []  # a fala de reserva não entra na memória

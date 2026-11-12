@@ -35,6 +35,7 @@ class Turno:
     fim_escuta: str = ""  # o que encerrou a escuta: vad, listen_stop ou limite
     vad_s: float = 0.0  # silêncio esperado depois da fala até decidir que ela acabou
     memoria: int = 0  # turnos anteriores enviados ao LLM
+    reserva: bool = False  # o LLM não respondeu e o robô disse a fala de reserva
     _inicio: float = field(default_factory=time.perf_counter, repr=False)
 
     def marcar(self, etapa: str) -> None:
@@ -52,6 +53,8 @@ class Turno:
 
 
 NEUTRO = Emocao("neutro")
+REPETICOES_SEM_FALA = 1
+FALA_RESERVA = "Desculpe, me perdi. Pode perguntar de novo?"
 log = logging.getLogger("pegasus.turno")
 
 
@@ -104,40 +107,66 @@ async def falar(
     texto: str, config: Config, turno: Turno, historico: Historico = ()
 ) -> AsyncIterator[BlocoAudio | Emocao]:
     """Gera a resposta ao texto do usuário: a emoção do rosto e, depois dela, um
-    bloco de áudio por frase. A emoção vem sempre antes do primeiro áudio."""
+    bloco de áudio por frase. A emoção vem sempre antes do primeiro áudio.
+
+    Se o LLM terminar sem dizer nada, o pedido é repetido uma vez; se ainda vier
+    vazio, o robô diz FALA_RESERVA em vez de ficar mudo."""
     # Modo "paralelo": a emoção é pedida em requisição própria e costuma chegar
     # enquanto o Piper sintetiza a primeira frase. Modo "antes": ela vem no próprio
     # fluxo da fala, se o LLM chamar a ferramenta antes de escrever.
     pedido = None
     if config.emocao_modo == "paralelo":
         pedido = asyncio.create_task(_emocao_medida(texto, config, turno, historico))
+
+    async def sintetizar(frase: str) -> BlocoAudio | Emocao:
+        t = time.perf_counter()
+        pcm, taxa = await asyncio.wait_for(tts.sintetizar(frase, config), config.tts_limite_s)
+        turno.tts_s += time.perf_counter() - t
+        return BlocoAudio(frase, pcm, taxa)
+
+    async def emocao_antes_do_audio() -> Emocao:
+        if pedido is not None:
+            return _registrar_emocao(await _aguardar_emocao(pedido, config), turno)
+        log.info("o LLM não chamou definir_emocao antes da fala; usando neutro")
+        return _registrar_emocao(NEUTRO, turno)
+
     try:
-        # Enquanto o Piper sintetiza uma frase, o vLLM continua gerando: os tokens
-        # ficam no buffer da conexão até o laço voltar a ler.
-        async for item in cortar_frases(_pedacos_medidos(texto, config, turno, historico)):
-            if isinstance(item, Emocao):
-                if turno.emocoes:
-                    log.info("emoção %s chegou depois do primeiro áudio; descartada", item.nome)
-                else:
-                    yield _registrar_emocao(item, turno)
-                continue
-            frase = limpar_para_voz(item)  # a voz nunca lê marcações
-            if not frase:
-                continue
-            turno.marcar("llm_primeira_frase")
-            t = time.perf_counter()
-            pcm, taxa = await asyncio.wait_for(tts.sintetizar(frase, config), config.tts_limite_s)
-            turno.tts_s += time.perf_counter() - t
+        for tentativa in range(1 + REPETICOES_SEM_FALA):
+            if tentativa:
+                # O Qwen3.8 às vezes encerra o turno no primeiro token (visto com a
+                # memória cheia): a resposta vem vazia, com finish_reason "stop".
+                log.warning("o LLM terminou sem dizer nada; repetindo o pedido")
+                turno.marcar("llm_repeticao")
+            # Enquanto o Piper sintetiza uma frase, o vLLM continua gerando: os tokens
+            # ficam no buffer da conexão até o laço voltar a ler.
+            async for item in cortar_frases(_pedacos_medidos(texto, config, turno, historico)):
+                if isinstance(item, Emocao):
+                    if turno.emocoes:
+                        log.info("emoção %s chegou depois do primeiro áudio; descartada", item.nome)
+                    else:
+                        yield _registrar_emocao(item, turno)
+                    continue
+                frase = limpar_para_voz(item)  # a voz nunca lê marcações
+                if not frase:
+                    continue
+                turno.marcar("llm_primeira_frase")
+                bloco = await sintetizar(frase)
+                if not turno.emocoes:
+                    yield await emocao_antes_do_audio()
+                turno.frases.append(frase)
+                turno.marcar("primeiro_audio")
+                yield bloco
+            if turno.frases:
+                break
+        else:
+            log.warning("o LLM não disse nada depois de repetir; usando a fala de reserva")
+            turno.reserva = True
+            bloco = await sintetizar(FALA_RESERVA)
             if not turno.emocoes:
-                if pedido is not None:
-                    emocao = await _aguardar_emocao(pedido, config)
-                else:
-                    log.info("o LLM não chamou definir_emocao antes da fala; usando neutro")
-                    emocao = NEUTRO
-                yield _registrar_emocao(emocao, turno)
-            turno.frases.append(frase)
+                yield await emocao_antes_do_audio()
+            turno.frases.append(FALA_RESERVA)
             turno.marcar("primeiro_audio")
-            yield BlocoAudio(frase, pcm, taxa)
+            yield bloco
     finally:
         if pedido is not None:
             pedido.cancel()  # turno interrompido ou emoção atrasada: não espera mais
