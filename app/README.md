@@ -2,15 +2,17 @@
 
 App Flutter (só Android) que mostra o rosto do robô e conversa com o servidor pelo protocolo de `docs/protocolo.md`.
 
-**Fase 2, versão mínima:** um círculo em tela cheia que muda de cor por estado.
+**Fase 3:** rosto animado (olhos e boca) desenhado com `CustomPainter`, em tela cheia.
 
-| Estado | Cor |
-| --- | --- |
-| ocioso | azul |
-| ouvindo | verde |
-| pensando | âmbar |
-| falando | roxo |
-| desconectado | cinza |
+| Estado | Cor dos traços | Comportamento |
+| --- | --- | --- |
+| ocioso | azul | pisca e olha em volta; respira devagar |
+| ouvindo | verde | olhos mais abertos, olhar para a frente |
+| pensando | âmbar | olhos apertados, olhar para cima e para o lado |
+| falando | roxo | a boca segue o volume (RMS) da voz, com ~50 ms de atraso |
+| desconectado | cinza | olhos fechados, dormindo |
+
+Emoções (mensagem `emotion`): `neutro`, `feliz` (olhos em meia-lua, sorriso), `triste` (pálpebras caídas por fora, boca para baixo), `surpreso` (olhos grandes, boca em "O"), `pensativo` (olhar para cima, cabeça inclinada) e `bravo` (pálpebras baixas do lado do nariz). A emoção volta a `neutro` num novo `listen_start` ou 10 s depois do ocioso.
 
 - **Tocar** inicia a escuta; tocar de novo encerra e o robô responde. Tocar enquanto ele pensa ou fala interrompe e começa a ouvir.
 - **Toque longo** abre a configuração do servidor (endereço, token e identificação do tablet). Fica salva no tablet.
@@ -30,6 +32,12 @@ flutter test
 
 Os `--dart-define` só dão os valores iniciais; depois de salvar pelo toque longo, vale o que está no tablet.
 
+Para ver o rosto sem o servidor, o modo de demonstração percorre estados e emoções com uma voz falsa:
+
+```bash
+flutter run --profile --dart-define=PEGASUS_DEMO=true
+```
+
 Durante o desenvolvimento, o tablet chega ao servidor por um túnel aberto no Mac. O servidor do Pegasus escuta em `127.0.0.1:8100` lá:
 
 ```bash
@@ -43,8 +51,10 @@ lib/
   main.dart             tela única, tela cheia e paisagem
   robo.dart             junta conexão, microfone e alto-falante; decide o estado
   conexao/              protocolo v1 e cliente WebSocket com reconexão
-  audio/                captura em blocos de 20 ms e reprodução PCM em fluxo
-  rosto/                estados e o círculo (o rosto animado vem na Fase 3)
+  audio/                captura em blocos de 20 ms, reprodução PCM em fluxo
+                        e envelope de volume para a boca
+  demo.dart             modo de demonstração (PEGASUS_DEMO)
+  rosto/                expressões, animador (piscar, olhar, boca) e pintor
   config/               endereço, token e diálogo de configuração
 ```
 
