@@ -32,6 +32,19 @@ void main() {
     expect(msg, isA<HelloServidor>());
     expect((msg as HelloServidor).taxaSaida, 22050);
     expect(msg.sessionId, '3f2c9a7e');
+    expect(msg.ativacao, Ativacao.toque); // sem o campo, vale toque
+  });
+
+  test('hello do servidor traz o modo de ativação', () {
+    Ativacao ativacao(String valor) =>
+        (MensagemServidor.decodificar(
+                  '{"type":"hello","session_id":"x","activation":"$valor"}',
+                )
+                as HelloServidor)
+            .ativacao;
+    expect(ativacao('palavra'), Ativacao.palavra);
+    expect(ativacao('toque'), Ativacao.toque);
+    expect(ativacao('outro'), Ativacao.toque);
   });
 
   test('state, stt, tts_start, tts_end e error', () {

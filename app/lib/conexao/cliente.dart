@@ -30,6 +30,9 @@ class Cliente {
   /// Taxa do áudio que o servidor envia, informada no `hello`.
   int taxaSaida = 22050;
 
+  /// Modo de ativação informado no `hello` da sessão atual.
+  Ativacao ativacao = Ativacao.toque;
+
   Stream<MensagemServidor> get mensagens => _mensagens.stream;
   Stream<Uint8List> get audio => _audio.stream;
 
@@ -117,11 +120,13 @@ class Cliente {
           if (msg is HelloServidor) {
             recebeuHello = true;
             taxaSaida = msg.taxaSaida;
+            ativacao = msg.ativacao;
             motivo.value = null;
             conectado.value = true;
             _iniciarPing();
             debugPrint(
-              '[Cliente] sessão ${msg.sessionId}, saída ${msg.taxaSaida} Hz',
+              '[Cliente] sessão ${msg.sessionId}, saída ${msg.taxaSaida} Hz, '
+              'ativação ${msg.ativacao.name}',
             );
           }
           if (msg != null) _mensagens.add(msg);

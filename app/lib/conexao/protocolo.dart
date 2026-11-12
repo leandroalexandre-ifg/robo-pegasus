@@ -25,6 +25,11 @@ enum EstadoServidor { ocioso, ouvindo, pensando, falando }
 /// Emoções enviadas pelo servidor em `emotion`.
 enum Emocao { neutro, feliz, triste, surpreso, pensativo, bravo }
 
+/// Como a escuta começa (campo `activation` do `hello` do servidor).
+/// - [toque]: só com `listen_start`.
+/// - [palavra]: escuta contínua; o servidor espera o nome "Pegasus".
+enum Ativacao { toque, palavra }
+
 String helloTablet({required String token, required String deviceId}) =>
     jsonEncode({
       'type': 'hello',
@@ -63,6 +68,9 @@ sealed class MensagemServidor {
         return HelloServidor(
           sessionId: '${json['session_id'] ?? ''}',
           taxaSaida: taxa is int ? taxa : 22050,
+          ativacao: json['activation'] == 'palavra'
+              ? Ativacao.palavra
+              : Ativacao.toque,
         );
       case 'state':
         final nome = json['state'];
@@ -97,9 +105,16 @@ sealed class MensagemServidor {
 }
 
 class HelloServidor extends MensagemServidor {
-  const HelloServidor({required this.sessionId, required this.taxaSaida});
+  const HelloServidor({
+    required this.sessionId,
+    required this.taxaSaida,
+    this.ativacao = Ativacao.toque,
+  });
   final String sessionId;
   final int taxaSaida;
+
+  /// Sem o campo (servidor antigo) ou com valor desconhecido, vale `toque`.
+  final Ativacao ativacao;
 }
 
 class Estado extends MensagemServidor {
