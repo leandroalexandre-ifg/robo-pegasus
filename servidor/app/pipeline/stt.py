@@ -67,6 +67,7 @@ def _transcrever(modelo, audio: np.ndarray, config: Config) -> str:
         beam_size=config.whisper_beam,
         vad_filter=False,  # o recorte da fala é feito antes, pelo Silero VAD
         condition_on_previous_text=False,
+        initial_prompt=config.whisper_prompt,
     )
     # transcribe() devolve um gerador: a decodificação acontece aqui, na thread.
     return " ".join(s.text.strip() for s in segmentos).strip()

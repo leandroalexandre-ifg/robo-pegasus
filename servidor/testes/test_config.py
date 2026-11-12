@@ -9,6 +9,7 @@ def test_padroes():
     assert c.llm_modelo is None
     assert c.whisper_gpu == "1"
     assert c.whisper_idioma == "pt"
+    assert c.whisper_prompt == "robô, Pegasus"
     assert c.piper_voz == MODELOS / "piper" / "pt_BR-faber-medium.onnx"
 
 
@@ -20,6 +21,7 @@ def test_sobrescreve_pelo_ambiente():
             "PEGASUS_WHISPER_PRECISAO": "int8_float16",
             "PEGASUS_PIPER_VOZ": "/tmp/voz.onnx",
             "PEGASUS_LLM_MAX_TOKENS": "80",
+            "PEGASUS_WHISPER_PROMPT": "",
         }
     )
     assert c.llm_url == "http://outro:9000/v1"
@@ -27,3 +29,4 @@ def test_sobrescreve_pelo_ambiente():
     assert c.whisper_precisao == "int8_float16"
     assert c.piper_voz == Path("/tmp/voz.onnx")
     assert c.llm_max_tokens == 80
+    assert c.whisper_prompt is None

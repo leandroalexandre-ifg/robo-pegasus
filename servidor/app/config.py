@@ -25,6 +25,7 @@ class Config:
     whisper_cache: Path
     whisper_idioma: str
     whisper_beam: int
+    whisper_prompt: str | None  # vocabulário que o Whisper deve esperar
 
     # Piper
     piper_voz: Path
@@ -45,6 +46,7 @@ def carregar_config(ambiente: dict[str, str] | None = None) -> Config:
         whisper_cache=Path(env.get("PEGASUS_WHISPER_CACHE", str(MODELOS / "hub"))),
         whisper_idioma=env.get("PEGASUS_WHISPER_IDIOMA", "pt"),
         whisper_beam=int(env.get("PEGASUS_WHISPER_BEAM", "1")),
+        whisper_prompt=env.get("PEGASUS_WHISPER_PROMPT", "robô, Pegasus") or None,
         piper_voz=Path(
             env.get("PEGASUS_PIPER_VOZ", str(MODELOS / "piper" / "pt_BR-faber-medium.onnx"))
         ),
