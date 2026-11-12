@@ -90,6 +90,7 @@ class _TelaDemoState extends State<TelaDemo> {
         estado: estado,
         emocao: emocao,
         nivelVoz: _vozFalsa,
+        esperandoNome: true, // o sinal só aparece no ocioso
         legenda: 'Demonstração: ${estado.name} · ${emocao.name}',
       ),
     );
