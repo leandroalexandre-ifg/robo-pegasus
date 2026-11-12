@@ -20,8 +20,7 @@ def pipeline(monkeypatch):
     """Substitui Whisper, LLM e Piper por falsos; devolve o que eles recebem."""
     estado = {
         "transcricao": "qual é o seu nome?",
-        "pedacos": ["Olá! ", "Sou o Pegasus."],
-        "emocao": Emocao("feliz"),
+        "pedacos": [Emocao("feliz"), "Olá! ", "Sou o Pegasus."],
     }
 
     async def preparar_modelos(config):
@@ -39,9 +38,6 @@ def pipeline(monkeypatch):
                 await asyncio.sleep(30)  # LLM "travado", para testar o abort
             yield p
 
-    async def escolher_emocao(texto, config):
-        return estado["emocao"]
-
     async def sintetizar(texto, config):
         return b"\x01\x00" * int(TAXA * 0.25), TAXA  # 250 ms → 3 blocos de até 100 ms
 
@@ -49,7 +45,6 @@ def pipeline(monkeypatch):
     monkeypatch.setattr(main, "preparar_modelos", preparar_modelos)
     monkeypatch.setattr(stt, "transcrever", transcrever)
     monkeypatch.setattr(llm, "gerar", gerar)
-    monkeypatch.setattr(llm, "escolher_emocao", escolher_emocao)
     monkeypatch.setattr(tts, "sintetizar", sintetizar)
     return estado
 
@@ -211,7 +206,7 @@ def test_token_valido():
 
 
 def test_sem_emocao_do_llm_envia_neutro_antes_do_audio(cliente, pipeline):
-    pipeline["emocao"] = None
+    pipeline["pedacos"] = ["Olá! ", "Sou o Pegasus."]
     with cliente.websocket_connect("/ws") as ws:
         _conectar(ws)
         _falar(ws)

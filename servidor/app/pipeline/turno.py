@@ -46,9 +46,9 @@ NEUTRO = Emocao("neutro")
 log = logging.getLogger("pegasus.turno")
 
 
-async def _pedacos_medidos(texto: str, config: Config, turno: Turno) -> AsyncIterator[str]:
+async def _pedacos_medidos(texto: str, config: Config, turno: Turno) -> AsyncIterator[str | Emocao]:
     async for pedaco in llm.gerar(texto, config):
-        turno.marcar("llm_primeiro_token")
+        turno.marcar("emocao_llm" if isinstance(pedaco, Emocao) else "llm_primeiro_token")
         yield pedaco
     turno.marcar("llm_fim")
 
@@ -79,16 +79,31 @@ async def transcrever(audio: np.ndarray, config: Config, turno: Turno) -> str:
     return turno.texto_usuario
 
 
+def _registrar_emocao(emocao: Emocao, turno: Turno) -> Emocao:
+    turno.emocoes.append(emocao.nome)
+    turno.marcar("emocao")
+    return emocao
+
+
 async def falar(texto: str, config: Config, turno: Turno) -> AsyncIterator[BlocoAudio | Emocao]:
     """Gera a resposta ao texto do usuário: a emoção do rosto e, depois dela, um
     bloco de áudio por frase. A emoção vem sempre antes do primeiro áudio."""
-    # A emoção é pedida em paralelo com a fala e costuma chegar enquanto o Piper
-    # sintetiza a primeira frase.
-    pedido = asyncio.create_task(_emocao_medida(texto, config, turno))
+    # Modo "paralelo": a emoção é pedida em requisição própria e costuma chegar
+    # enquanto o Piper sintetiza a primeira frase. Modo "antes": ela vem no próprio
+    # fluxo da fala, se o LLM chamar a ferramenta antes de escrever.
+    pedido = None
+    if config.emocao_modo == "paralelo":
+        pedido = asyncio.create_task(_emocao_medida(texto, config, turno))
     try:
         # Enquanto o Piper sintetiza uma frase, o vLLM continua gerando: os tokens
         # ficam no buffer da conexão até o laço voltar a ler.
         async for item in cortar_frases(_pedacos_medidos(texto, config, turno)):
+            if isinstance(item, Emocao):
+                if turno.emocoes:
+                    log.info("emoção %s chegou depois do primeiro áudio; descartada", item.nome)
+                else:
+                    yield _registrar_emocao(item, turno)
+                continue
             frase = limpar_para_voz(item)  # a voz nunca lê marcações
             if not frase:
                 continue
@@ -97,15 +112,18 @@ async def falar(texto: str, config: Config, turno: Turno) -> AsyncIterator[Bloco
             pcm, taxa = await tts.sintetizar(frase, config)
             turno.tts_s += time.perf_counter() - t
             if not turno.emocoes:
-                emocao = await _aguardar_emocao(pedido, config)
-                turno.emocoes.append(emocao.nome)
-                turno.marcar("emocao")
-                yield emocao
+                if pedido is not None:
+                    emocao = await _aguardar_emocao(pedido, config)
+                else:
+                    log.info("o LLM não chamou definir_emocao antes da fala; usando neutro")
+                    emocao = NEUTRO
+                yield _registrar_emocao(emocao, turno)
             turno.frases.append(frase)
             turno.marcar("primeiro_audio")
             yield BlocoAudio(frase, pcm, taxa)
     finally:
-        pedido.cancel()  # turno interrompido ou emoção atrasada: não espera mais
+        if pedido is not None:
+            pedido.cancel()  # turno interrompido ou emoção atrasada: não espera mais
     turno.marcar("fim")
 
 

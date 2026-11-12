@@ -39,7 +39,7 @@ def _falsos(monkeypatch, transcricao, pedacos, emocao=FELIZ, atraso_emocao=0.0):
 
 
 def _rodar(t, **ambiente):
-    config = carregar_config(ambiente)
+    config = carregar_config({"PEGASUS_EMOCAO_MODO": "paralelo"} | ambiente)
 
     async def coletar():
         return [b async for b in turno.conversar(np.zeros(160, np.float32), config, t)]
@@ -114,3 +114,36 @@ def test_marcacoes_nao_chegam_a_voz(monkeypatch):
     itens = _rodar(t)
     assert [b.frase for b in itens[1:]] == ["Que legal!", "Parabéns."]
     assert sintetizadas == ["Que legal!", "Parabéns."]
+
+
+def _rodar_antes(t):
+    return _rodar(t, PEGASUS_EMOCAO_MODO="antes")
+
+
+def test_antes_emocao_do_fluxo_sai_primeiro_sem_requisicao_paralela(monkeypatch):
+    _, pedidos = _falsos(monkeypatch, "ganhei!", [Emocao("surpreso"), "Uau! ", "Parabéns."])
+    t = turno.Turno()
+    itens = _rodar_antes(t)
+    assert itens[0] == Emocao("surpreso")
+    assert [b.frase for b in itens[1:]] == ["Uau!", "Parabéns."]
+    assert pedidos == []  # sem requisição paralela
+    assert t.emocoes == ["surpreso"]
+    assert t.tempos["emocao_llm"] <= t.tempos["emocao"] <= t.tempos["primeiro_audio"]
+
+
+def test_antes_sem_chamada_usa_neutro_antes_do_audio(monkeypatch):
+    _, pedidos = _falsos(monkeypatch, "oi", ["Oi! ", "Tudo bem?"])
+    t = turno.Turno()
+    itens = _rodar_antes(t)
+    assert itens[0] == Emocao("neutro")
+    assert [i for i in itens if isinstance(i, Emocao)] == [Emocao("neutro")]
+    assert pedidos == []
+
+
+def test_antes_emocao_depois_do_primeiro_audio_e_descartada(monkeypatch):
+    _falsos(monkeypatch, "oi", ["Oi! ", Emocao("feliz"), "Tudo bem?"])
+    t = turno.Turno()
+    itens = _rodar_antes(t)
+    assert [i for i in itens if isinstance(i, Emocao)] == [Emocao("neutro")]
+    assert itens[0] == Emocao("neutro")
+    assert t.emocoes == ["neutro"]
