@@ -180,7 +180,9 @@ A cada 15 s. `t` é opcional e volta igual no `pong`. Sem nenhuma mensagem do ta
 {"type": "state", "state": "ouvindo"}
 ```
 
-Estados: `ocioso`, `ouvindo`, `pensando`, `falando`. O estado `desconectado` existe só no app, quando a conexão cai.
+Estados: `ocioso`, `ouvindo`, `pensando`, `falando`, `desconectado`.
+
+`desconectado` vindo do servidor quer dizer que a conexão está de pé, mas o servidor de linguagem (vLLM) está fora do ar. O app também mostra `desconectado` quando a própria conexão cai. Ver "Servidor de linguagem fora do ar".
 
 ### `stt`
 
@@ -250,6 +252,16 @@ Emoção a sobrepor ao estado do rosto durante a resposta. Valores: `neutro`, `f
 - **Valor padrão:** o servidor envia `neutro` quando o LLM não chama a ferramenta, devolve um valor fora da lista ou falha. No modo `antes`, isso acontece se a primeira frase ficar pronta sem que a ferramenta tenha sido chamada; no modo `paralelo`, se a emoção não chegar em até `PEGASUS_EMOCAO_ESPERA_MS` (padrão 1000 ms) depois da primeira frase pronta. Uma emoção que chegue depois disso é descartada.
 - **Duração:** a emoção vale até o próximo `listen_start` ou até 10 s depois de o rosto voltar a `ocioso` com o áudio da resposta já tocado; então o rosto volta a `neutro`. O app não zera a emoção no próprio `state "ocioso"` porque o áudio da resposta ainda está tocando nesse momento (o servidor envia mais rápido do que toca). Turnos sem resposta (`stt` vazio, `error`, `abort` antes do primeiro áudio) e o "Oi?" da palavra de ativação não têm `emotion`.
 - **Texto limpo:** o texto de `tts_start` e o áudio nunca contêm marcações de emoção nem de ferramenta. O servidor encerra a fala na primeira imitação de chamada escrita pelo LLM (`<tool_call>`, `definir_emocao(...)`, `{"emocao": ...}`) e remove marcas como `[feliz]` ou `*sorri*`, emojis e símbolos de markdown antes da síntese.
+
+## Servidor de linguagem fora do ar
+
+O servidor verifica o vLLM a cada 5 s. Com duas verificações seguidas sem resposta, ou com um turno que não conseguiu falar com ele, o servidor:
+
+- interrompe o turno em andamento em todas as sessões (um turno que falhou envia antes o `error`);
+- envia `state "desconectado"` a todos os tablets, e também no lugar do `ocioso` inicial a quem se conectar nesse período;
+- deixa de escutar: responde a `listen_start` com `state "desconectado"` de novo e descarta o áudio, inclusive o da escuta contínua.
+
+A conexão continua aberta, com `ping`/`pong`. Com o vLLM fora, o servidor o verifica a cada 2 s. Quando ele volta, o servidor envia `state "ocioso"`, e o robô volta a escutar sem o tablet precisar reconectar.
 
 ## Fechamento
 

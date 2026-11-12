@@ -18,6 +18,7 @@ from app.pipeline import ativacao, stt, tts
 from app.pipeline.emocao import Emocao
 from app.pipeline.turno import Turno, falar, transcrever
 from app.pipeline.vad import DetectorFala
+from app.saude import MonitorLLM
 from app.wav import TAXA_ENTRADA
 
 log = logging.getLogger("pegasus.sessao")
@@ -45,7 +46,10 @@ def _amostras(pcm: bytes) -> np.ndarray:
 
 
 class Sessao:
-    def __init__(self, ws: WebSocket, config: Config, device_id: str):
+    def __init__(
+        self, ws: WebSocket, config: Config, device_id: str, monitor: MonitorLLM | None = None
+    ):
+        self.monitor = monitor
         self.ws = ws
         self.config = config
         self.device_id = device_id
@@ -82,6 +86,24 @@ class Sessao:
     async def enviar_audio(self, pcm: bytes) -> None:
         await self._enviar(self.ws.send_bytes(pcm))
 
+    def estado_livre(self) -> str:
+        """Estado fora de um turno: ocioso, ou desconectado com o LLM fora do ar."""
+        if self.monitor is not None and not self.monitor.disponivel:
+            return "desconectado"
+        return "ocioso"
+
+    async def ao_llm(self, disponivel: bool) -> None:
+        """O monitor viu o LLM cair ou voltar."""
+        if not disponivel:
+            if self.estado == "desconectado":
+                return  # o turno que falhou já avisou
+            self._epoca += 1
+            await self.cancelar_turno()
+            self._limpar_audio()
+            await self.mudar_estado("desconectado")
+        elif self.estado == "desconectado":
+            await self.mudar_estado("ocioso")
+
     async def mudar_estado(self, estado: str) -> None:
         self.estado = estado
         await self.enviar_json({"type": "state", "state": estado})
@@ -97,6 +119,9 @@ class Sessao:
         await self.mudar_estado("ouvindo")
 
     async def ao_listen_start(self) -> None:
+        if self.estado_livre() == "desconectado":
+            await self.mudar_estado("desconectado")  # sem LLM, o robô não escuta
+            return
         self._epoca += 1
         await self.cancelar_turno()  # falar por cima interrompe o robô
         await self._abrir_escuta()
@@ -119,7 +144,7 @@ class Sessao:
         ):
             log.info("sessão %s: escuta sem fala; voltando a ocioso", self.id)
             self._limpar_audio()
-            await self.mudar_estado("ocioso")
+            await self.mudar_estado(self.estado_livre())
 
     async def ao_listen_stop(self) -> None:
         if self.estado == "ouvindo":
@@ -152,7 +177,7 @@ class Sessao:
     async def _encerrar_escuta(self, motivo: str) -> None:
         pcm, turno = self._fechar_fala(motivo)
         if not pcm:
-            await self.mudar_estado("ocioso")
+            await self.mudar_estado(self.estado_livre())
             return
         await self.mudar_estado("pensando")
         self._turno = asyncio.create_task(self._responder(pcm, turno))
@@ -161,7 +186,7 @@ class Sessao:
         self._epoca += 1
         await self.cancelar_turno()
         self._limpar_audio()
-        await self.mudar_estado("ocioso")
+        await self.mudar_estado(self.estado_livre())
 
     async def _vigiar(self, dados: bytes) -> None:
         """Escuta contínua em `ocioso`: separa as falas com o VAD e manda cada uma
@@ -274,7 +299,7 @@ class Sessao:
                 await self.enviar_json({"type": "stt", "text": texto})
                 if texto:
                     await self._falar(texto, turno, memoria)
-            await self.mudar_estado("ocioso")
+            await self.mudar_estado(self.estado_livre())
         except asyncio.CancelledError:
             self._lembrar(turno)
             registro.registrar("interrompido", **self._medidas(turno, duracao_s))
@@ -282,6 +307,11 @@ class Sessao:
         except openai.APIError as e:
             log.error("sessão %s: falha no LLM (%s)", self.id, type(e).__name__)
             self._registrar_falha(turno, duracao_s, e)
+            if self.monitor is not None and isinstance(e, openai.APIConnectionError):
+                if not await self.monitor.suspeitar():
+                    # Marca já (sem await no meio), para o aviso do monitor, que vem
+                    # logo depois, não cancelar este turno no meio do envio do erro.
+                    self.estado = "desconectado"
             await self._falhar("O servidor de linguagem não está disponível.")
         except TimeoutError as e:
             log.error("sessão %s: tempo esgotado depois da etapa %s", self.id, turno.etapa)
@@ -323,7 +353,7 @@ class Sessao:
                 self._frase_aberta = False
                 await self.enviar_json({"type": "tts_end"})
             await self.enviar_json({"type": "error", "message": mensagem})
-            await self.mudar_estado("ocioso")
+            await self.mudar_estado(self.estado_livre())
 
     def _medidas(self, turno: Turno, duracao_s: float) -> dict:
         """Campos do registro do turno: tempos e contagens, nunca o texto."""

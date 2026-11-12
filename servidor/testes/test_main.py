@@ -8,7 +8,7 @@ import pytest
 from fastapi.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect
 
-from app import main
+from app import main, saude
 from app import sessao as sessao_mod
 from app.pipeline import llm, stt, tts
 from app.pipeline.emocao import Emocao
@@ -46,6 +46,17 @@ def pipeline(monkeypatch, tmp_path):
 
     monkeypatch.setenv("PEGASUS_TOKENS", f"outro,{TOKEN}")
     monkeypatch.setenv("PEGASUS_LOG_PASTA", str(tmp_path))
+    estado["llm_no_ar"] = True
+
+    def verificador(config):
+        async def verificar():
+            return estado["llm_no_ar"]
+
+        return verificar
+
+    monkeypatch.setattr(saude, "verificador_http", verificador)
+    monkeypatch.setattr(saude, "INTERVALO_S", 0.02)
+    monkeypatch.setattr(saude, "INTERVALO_FORA_S", 0.02)
     estado["turnos"] = tmp_path / "turnos.jsonl"
     monkeypatch.setattr(main, "preparar_modelos", preparar_modelos)
     monkeypatch.setattr(stt, "transcrever", transcrever)
@@ -592,3 +603,71 @@ def test_limite_do_turno_inteiro(monkeypatch, pipeline):
     assert tipos[-3:] == ["tts_end", "error", "ocioso"]
     [r] = _registros(pipeline)
     assert r["etapa"] == "primeiro_envio"
+
+
+def _esperar_estado(ws, estado):
+    while (m := ws.receive()).get("text") is None or json.loads(m["text"]).get("state") != estado:
+        pass
+
+
+def test_llm_cai_e_volta_avisando_o_tablet(cliente, pipeline):
+    with cliente.websocket_connect("/ws") as ws:
+        _conectar(ws)
+        pipeline["llm_no_ar"] = False
+        assert ws.receive_json() == {"type": "state", "state": "desconectado"}
+        ws.send_json({"type": "listen_start"})  # sem LLM, o robô não escuta
+        assert ws.receive_json() == {"type": "state", "state": "desconectado"}
+        pipeline["llm_no_ar"] = True
+        assert ws.receive_json() == {"type": "state", "state": "ocioso"}
+        assert _tipos(_turno(ws, "voltou?", pipeline))[-1] == "ocioso"
+
+
+def test_tablet_que_conecta_com_o_llm_fora_ve_desconectado(monkeypatch, pipeline):
+    pipeline["llm_no_ar"] = False
+    with TestClient(main.app) as c, c.websocket_connect("/ws") as ws:
+        ws.send_json(_hello())
+        assert ws.receive_json()["type"] == "hello"
+        assert ws.receive_json() == {"type": "state", "state": "desconectado"}
+        pipeline["llm_no_ar"] = True
+        assert ws.receive_json() == {"type": "state", "state": "ocioso"}
+
+
+def test_turno_que_nao_alcanca_o_llm_termina_em_desconectado(cliente, pipeline, monkeypatch):
+    pipeline["pedacos"] = [openai.APIConnectionError(request=httpx.Request("POST", "http://x"))]
+    monkeypatch.setattr(saude, "INTERVALO_S", 30)  # só o próprio turno descobre a queda
+    with cliente.websocket_connect("/ws") as ws:
+        _conectar(ws)
+        time.sleep(0.05)  # a verificação em curso termina e a próxima fica para depois
+        pipeline["llm_no_ar"] = False  # caiu bem na hora do turno
+        _falar(ws)
+        recebidas = []
+        while True:
+            m = ws.receive_json()
+            recebidas.append(m)
+            if m.get("state") in ("desconectado", "ocioso"):
+                break
+        assert _tipos(recebidas) == ["pensando", "stt", "error", "desconectado"]
+        ws.send_json({"type": "ping", "t": 1})  # nenhum desconectado repetido no meio
+        assert ws.receive_json() == {"type": "pong", "t": 1}
+
+
+def test_queda_do_llm_interrompe_a_resposta_em_andamento(cliente, pipeline):
+    pipeline["pedacos"] = ["Primeira frase. ", None]
+    with cliente.websocket_connect("/ws") as ws:
+        _conectar(ws)
+        _falar(ws)
+        while (m := ws.receive()).get("text") is None or json.loads(m["text"])["type"] != "tts_end":
+            pass
+        pipeline["llm_no_ar"] = False
+        assert ws.receive_json() == {"type": "state", "state": "desconectado"}
+
+
+def test_escuta_continua_parada_com_o_llm_fora(escuta_continua, pipeline):
+    pipeline["falas"].append("Pegasus, oi")
+    with escuta_continua.websocket_connect("/ws") as ws:
+        _conectar_continuo(ws)
+        pipeline["llm_no_ar"] = False
+        assert ws.receive_json() == {"type": "state", "state": "desconectado"}
+        _enviar_audio(ws, 3.0)
+        _nada_mais_foi_enviado(ws)
+    assert pipeline["transcritos"] == []  # o áudio nem chega ao Whisper

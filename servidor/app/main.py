@@ -16,7 +16,7 @@ from contextlib import asynccontextmanager
 import numpy as np
 from fastapi import FastAPI, WebSocket
 
-from app import persona, registro
+from app import persona, registro, saude
 from app.config import Config, carregar_config, resumo_publico
 from app.pipeline import stt, tts, vad
 from app.sessao import Sessao
@@ -63,7 +63,21 @@ async def lifespan(app: FastAPI):
     app.state.config = config
     app.state.taxa_saida = await preparar_modelos(config)
     log.info("modelos prontos; áudio de saída a %d Hz", app.state.taxa_saida)
-    yield
+    sessoes: set[Sessao] = set()
+    app.state.sessoes = sessoes
+
+    async def avisar(disponivel: bool) -> None:
+        await asyncio.gather(*(s.ao_llm(disponivel) for s in list(sessoes)), return_exceptions=True)
+
+    monitor = saude.MonitorLLM(saude.verificador_http(config), avisar)
+    app.state.monitor = monitor
+    await monitor.iniciar()
+    if not monitor.disponivel:
+        log.error("LLM fora do ar na subida; os tablets ficam em desconectado até ele subir")
+    try:
+        yield
+    finally:
+        await monitor.parar()
 
 
 app = FastAPI(title="Robô Pegasus", lifespan=lifespan)
@@ -124,7 +138,8 @@ async def conexao(ws: WebSocket) -> None:
         await ws.close(*falha)
         return
 
-    sessao = Sessao(ws, config, str(hello.get("device_id") or "sem-id")[:64])
+    monitor: saude.MonitorLLM = ws.app.state.monitor
+    sessao = Sessao(ws, config, str(hello.get("device_id") or "sem-id")[:64], monitor)
     log.info("sessão %s: tablet %s conectado", sessao.id, sessao.device_id)
     await sessao.enviar_json(
         {
@@ -135,11 +150,13 @@ async def conexao(ws: WebSocket) -> None:
             "activation": config.ativacao,
         }
     )
-    await sessao.mudar_estado("ocioso")
+    await sessao.mudar_estado(sessao.estado_livre())
+    ws.app.state.sessoes.add(sessao)
 
     try:
         await _atender(ws, sessao)
     finally:
+        ws.app.state.sessoes.discard(sessao)
         with contextlib.suppress(Exception):
             await sessao.encerrar()
         log.info("sessão %s: desconectada", sessao.id)
