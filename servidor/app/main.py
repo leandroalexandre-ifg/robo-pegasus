@@ -7,14 +7,16 @@ Uso, a partir de servidor/:
 """
 
 import asyncio
+import collections
 import contextlib
 import hmac
 import json
 import logging
+import time
 from contextlib import asynccontextmanager
 
 import numpy as np
-from fastapi import FastAPI, WebSocket
+from fastapi import FastAPI, HTTPException, Request, WebSocket
 
 from app import persona, registro, saude
 from app.config import Config, carregar_config, resumo_publico
@@ -65,6 +67,7 @@ async def lifespan(app: FastAPI):
     log.info("modelos prontos; áudio de saída a %d Hz", app.state.taxa_saida)
     sessoes: set[Sessao] = set()
     app.state.sessoes = sessoes
+    app.state.inicio = time.time()
 
     async def avisar(disponivel: bool) -> None:
         await asyncio.gather(*(s.ao_llm(disponivel) for s in list(sessoes)), return_exceptions=True)
@@ -81,6 +84,35 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="Robô Pegasus", lifespan=lifespan)
+
+
+# "testclient" é o endereço que o TestClient do Starlette informa nos testes.
+_LOCAIS = {"127.0.0.1", "::1", "testclient"}
+
+
+@app.get("/status")
+async def status(request: Request) -> dict:
+    """Estado da API para o pegasus-status. Só para quem está no próprio servidor;
+    sem segredos, textos ou nomes de tablets."""
+    if request.client is None or request.client.host not in _LOCAIS:
+        raise HTTPException(status_code=404)
+    estado = request.app.state
+    monitor: saude.MonitorLLM = estado.monitor
+    return {
+        "versao_protocolo": VERSAO_PROTOCOLO,
+        "ativacao": estado.config.ativacao,
+        "no_ar_s": round(time.time() - estado.inicio),
+        "llm": {
+            "disponivel": monitor.disponivel,
+            "desde_s": round(time.time() - monitor.desde),
+            "quedas": monitor.quedas,
+        },
+        "sessoes": {
+            "total": len(estado.sessoes),
+            "por_estado": dict(collections.Counter(s.estado for s in estado.sessoes)),
+        },
+        "turnos": registro.resumo(),
+    }
 
 
 def token_valido(token: object, tokens: frozenset[str]) -> bool:

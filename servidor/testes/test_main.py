@@ -671,3 +671,20 @@ def test_escuta_continua_parada_com_o_llm_fora(escuta_continua, pipeline):
         _enviar_audio(ws, 3.0)
         _nada_mais_foi_enviado(ws)
     assert pipeline["transcritos"] == []  # o áudio nem chega ao Whisper
+
+
+def test_status_mostra_llm_sessoes_e_latencia(cliente, pipeline):
+    with cliente.websocket_connect("/ws") as ws:
+        _conectar(ws)
+        _falar(ws)
+        _receber_ate_ocioso(ws)
+        status = cliente.get("/status").json()
+    assert status["llm"]["disponivel"] is True
+    assert status["sessoes"] == {"total": 1, "por_estado": {"ocioso": 1}}
+    assert status["turnos"]["por_tipo"]["turno"] >= 1
+    assert "tablet-teste" not in json.dumps(status)
+
+
+def test_status_recusa_quem_nao_e_local(pipeline):
+    with TestClient(main.app, client=("10.0.0.5", 5000)) as c:
+        assert c.get("/status").status_code == 404
