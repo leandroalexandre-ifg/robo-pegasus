@@ -1,4 +1,4 @@
-"""Palavra de ativação: reconhece "Pegasus" no começo de uma fala transcrita."""
+"""Palavra de ativação: reconhece "Pegasus" (ou "Ei, Pegasus") no começo de uma fala transcrita."""
 
 import re
 import unicodedata
@@ -7,6 +7,9 @@ PALAVRA = "pegasus"
 # Grafias que o Whisper costuma produzir para "Pegasus" em português, já sem acento.
 # Além delas, vale qualquer grafia a uma letra de distância (ver `e_ativacao`).
 VARIANTES = frozenset({"pegasus", "pegaso", "pegasos", "pegasso", "pegazus", "pegazo", "pegassus"})
+# Chamamentos aceitos antes da palavra: "Ei, Pegasus", "Oi, Pegasus". "Hey" é como o
+# Whisper às vezes escreve o "Ei".
+CHAMAMENTOS = frozenset({"ei", "oi", "hey"})
 _TAMANHO_MIN_APROXIMADO = 6  # abaixo disso, uma letra de diferença pega palavras comuns
 
 # Primeira palavra (só letras) e o resto, aceitando pontuação antes dela.
@@ -42,8 +45,11 @@ def pergunta(texto: str) -> str | None:
     """O que vem depois da palavra de ativação no começo do texto.
 
     None: o texto não começa com a palavra (a fala deve ser descartada).
-    "": a fala era só a palavra, sem pergunta."""
+    "": a fala era só a palavra, sem pergunta.
+    A palavra pode vir depois de um chamamento: "Ei, Pegasus", "Oi, Pegasus"."""
     m = _PRIMEIRA_PALAVRA.match(texto)
+    if m is not None and _normalizar(m[1]) in CHAMAMENTOS:
+        m = _PRIMEIRA_PALAVRA.match(m[2])
     if m is None or not e_ativacao(m[1]):
         return None
     return m[2].lstrip(_PONTUACAO).rstrip()

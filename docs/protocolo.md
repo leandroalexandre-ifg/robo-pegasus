@@ -69,7 +69,7 @@ No estado `ocioso`, o servidor separa as falas com o VAD (o mesmo fim de fala de
 - **Só "Pegasus":** o servidor responde "Oi?" (`state "falando"`, uma frase `tts_start`/áudio/`tts_end`, sem `emotion`) e abre a escuta (`state "ouvindo"`). A fala seguinte é a pergunta, sem precisar repetir a palavra. Sem fala em `PEGASUS_VAD_SEM_FALA_MS`, volta a `ocioso`.
 - **Qualquer outra fala:** é descartada na hora. O servidor não envia nada ao tablet, não registra nada no log e não guarda o áudio nem o texto. A fala também não entra na memória da sessão.
 
-Valem as variações próximas que o Whisper produz: acentos e maiúsculas são ignorados ("Pégasus", "PEGASUS"), e grafias como "Pégaso", "Pegasos" ou "Pegassus" também valem. A palavra precisa abrir a frase: "Qual é o seu nome, Pegasus?" é descartada.
+Valem as variações próximas que o Whisper produz: acentos e maiúsculas são ignorados ("Pégasus", "PEGASUS"), e grafias como "Pégaso", "Pegasos" ou "Pegassus" também valem. A palavra precisa abrir a frase, podendo vir só depois de um chamamento ("Ei, Pegasus", "Oi, Pegasus"): "Qual é o seu nome, Pegasus?" é descartada.
 
 ```
 Tablet                                   Servidor
