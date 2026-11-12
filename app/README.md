@@ -19,6 +19,15 @@ Emoções (mensagem `emotion`): `neutro`, `feliz` (olhos em meia-lua, sorriso), 
 - **Toque longo** abre a configuração do servidor (endereço, token e identificação do tablet). Fica salva no tablet.
 - Meio-duplex: o microfone só fica ligado enquanto está verde.
 
+### Ativação por palavra (Fase 4b)
+
+O modo vem do servidor (`PEGASUS_ATIVACAO`, campo `activation` do `hello`); o app não tem configuração própria para isso.
+
+- **`toque`** (padrão): como acima.
+- **`palavra`:** o microfone fica aberto o tempo todo e o servidor espera o nome: "Pegasus, que horas são?" já é a pergunta; só "Pegasus" faz o robô responder "Oi?" e ouvir a próxima fala. Outras falas são descartadas pelo servidor. Com o rosto ocioso, um **pontinho verde** pulsando abaixo da boca indica que ele está ouvindo à espera do nome.
+- O toque continua valendo nos dois modos.
+- Meio-duplex no modo `palavra`: o microfone fecha no primeiro `tts_start` e só reabre depois de tocar todo o áudio recebido, com 250 ms de folga, para o robô não ouvir a própria voz.
+
 ## Rodar
 
 ```bash
