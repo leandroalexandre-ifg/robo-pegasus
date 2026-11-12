@@ -176,4 +176,4 @@ if __name__ == "__main__":
     import uvicorn
 
     config = carregar_config()
-    uvicorn.run("app.main:app", host=config.api_host, port=config.api_porta, ws="websockets")
+    uvicorn.run("app.main:app", host=config.api_host, port=config.api_porta, ws="websockets-sansio")
