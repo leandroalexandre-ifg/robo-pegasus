@@ -716,6 +716,15 @@ def test_llm_mudo_uma_vez_repete_o_pedido(cliente, pipeline, monkeypatch):
     assert "llm_repeticao" in r["ms"]
 
 
+def test_repeticao_vai_sem_a_memoria(cliente, pipeline, monkeypatch):
+    chamadas = _llm_em_sequencia(monkeypatch, ["Primeira."], [], ["Segunda."])
+    with cliente.websocket_connect("/ws") as ws:
+        _conectar(ws)
+        _turno(ws, "um", pipeline)
+        _turno(ws, "dois", pipeline)  # vem vazio com memória; repete sem ela
+    assert chamadas == [[], [("um", "Primeira.")], []]
+
+
 def test_llm_mudo_sempre_usa_a_fala_de_reserva(cliente, pipeline, monkeypatch):
     from app.pipeline.turno import FALA_RESERVA
 

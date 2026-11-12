@@ -132,14 +132,18 @@ async def falar(
 
     try:
         for tentativa in range(1 + REPETICOES_SEM_FALA):
+            contexto = historico
             if tentativa:
-                # O Qwen3.8 às vezes encerra o turno no primeiro token (visto com a
-                # memória cheia): a resposta vem vazia, com finish_reason "stop".
-                log.warning("o LLM terminou sem dizer nada; repetindo o pedido")
+                # O Qwen3.8 às vezes encerra o turno no primeiro token: a resposta vem
+                # vazia, com finish_reason "stop". Depende do conteúdo da memória (até
+                # metade das vezes com certas conversas) e nunca foi visto sem ela, então
+                # a nova tentativa vai sem memória: perde o contexto, mas responde.
+                log.warning("o LLM terminou sem dizer nada; repetindo o pedido sem a memória")
                 turno.marcar("llm_repeticao")
+                contexto = ()
             # Enquanto o Piper sintetiza uma frase, o vLLM continua gerando: os tokens
             # ficam no buffer da conexão até o laço voltar a ler.
-            async for item in cortar_frases(_pedacos_medidos(texto, config, turno, historico)):
+            async for item in cortar_frases(_pedacos_medidos(texto, config, turno, contexto)):
                 if isinstance(item, Emocao):
                     if turno.emocoes:
                         log.info("emoção %s chegou depois do primeiro áudio; descartada", item.nome)
