@@ -127,6 +127,7 @@ async def conexao(ws: WebSocket) -> None:
             "version": VERSAO_PROTOCOLO,
             "session_id": sessao.id,
             "audio": {"format": "pcm_s16le", "sample_rate": ws.app.state.taxa_saida, "channels": 1},
+            "activation": config.ativacao,
         }
     )
     await sessao.mudar_estado("ocioso")

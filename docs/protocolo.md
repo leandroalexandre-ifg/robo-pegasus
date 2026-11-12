@@ -50,7 +50,45 @@ Tablet                                   Servidor
 
 **Fim da fala:** o servidor detecta sozinho, com o Silero VAD, quando o usuário parou de falar: depois de `PEGASUS_VAD_SILENCIO_MS` (padrão 600 ms) de silêncio após a fala, a escuta termina e o servidor envia `state "pensando"`. O tablet não precisa enviar `listen_stop`, mas pode, para encerrar antes.
 
-**Meio-duplex:** o tablet desliga o microfone ao receber `state "pensando"` (ou `state "ocioso"`) e só volta a ouvir com um novo `listen_start`. O servidor ignora áudio recebido fora do estado `ouvindo`.
+**Meio-duplex:** no modo `toque`, o tablet desliga o microfone ao receber `state "pensando"` (ou `state "ocioso"`) e só volta a ouvir com um novo `listen_start`. O servidor ignora áudio recebido fora do estado `ouvindo`. No modo `palavra`, veja a seção a seguir.
+
+## Ativação: toque ou palavra
+
+O modo é configurado no servidor com `PEGASUS_ATIVACAO` (padrão `toque`) e informado ao tablet no campo `activation` do `hello` do servidor.
+
+- **`toque`:** a escuta começa com `listen_start` (um toque na tela), como na sequência acima.
+- **`palavra`:** escuta contínua. A escuta começa quando o usuário diz "Pegasus". O toque (`listen_start`) continua valendo.
+
+### Modo `palavra`
+
+O tablet envia áudio o tempo todo, exceto enquanto toca a voz do robô: ele fecha o microfone no primeiro `tts_start` e reabre quando termina de tocar o último áudio recebido. Como o servidor envia o áudio mais rápido que o tempo real, isso acontece depois do `state` seguinte (`ocioso` ou `ouvindo`). Assim o robô não ouve a própria voz, que também diz "Pegasus".
+
+No estado `ocioso`, o servidor separa as falas com o VAD (o mesmo fim de fala de `PEGASUS_VAD_SILENCIO_MS`), transcreve cada uma com o Whisper e olha a primeira palavra:
+
+- **"Pegasus" seguido de mais texto** ("Pegasus, qual é o seu nome?"): o resto da frase é a pergunta. O servidor envia `state "pensando"` e segue um turno normal, com `stt` trazendo só a pergunta, sem a palavra.
+- **Só "Pegasus":** o servidor responde "Oi?" (`state "falando"`, uma frase `tts_start`/áudio/`tts_end`, sem `emotion`) e abre a escuta (`state "ouvindo"`). A fala seguinte é a pergunta, sem precisar repetir a palavra. Sem fala em `PEGASUS_VAD_SEM_FALA_MS`, volta a `ocioso`.
+- **Qualquer outra fala:** é descartada na hora. O servidor não envia nada ao tablet, não registra nada no log e não guarda o áudio nem o texto. A fala também não entra na memória da sessão.
+
+Valem as variações próximas que o Whisper produz: acentos e maiúsculas são ignorados ("Pégasus", "PEGASUS"), e grafias como "Pégaso", "Pegasos" ou "Pegassus" também valem. A palavra precisa abrir a frase: "Qual é o seu nome, Pegasus?" é descartada.
+
+```
+Tablet                                   Servidor
+  │ ◄───── hello {activation:"palavra"} ── │
+  │ ◄───────────────── state "ocioso" ──── │
+  │ ══ áudio PCM contínuo ══════════════►  │   VAD separa as falas; Whisper transcreve
+  │                                        │   "conversa qualquer" → descartada
+  │                                        │   "Pegasus." →
+  │ ◄───────────────── state "falando" ─── │
+  │ ◄───────────── tts_start {"Oi?"} ───── │
+  │ ◄══════════════════ áudio do "Oi?" ═══ │   o tablet fecha o microfone e toca
+  │ ◄──────────────────────── tts_end ──── │
+  │ ◄───────────────── state "ouvindo" ─── │
+  │ ══ áudio PCM (depois de tocar) ═════►  │   "que horas são?"
+  │ ◄──────────────── state "pensando" ─── │
+  │                ...                     │   turno normal, depois state "ocioso"
+```
+
+Enquanto uma fala está sendo verificada, um `listen_start` ou um `abort` a descarta. Áudio recebido em `pensando` ou `falando` é ignorado.
 
 ## Mensagens do tablet → servidor
 
@@ -88,7 +126,7 @@ Durante a escuta, o servidor:
 
 ### Áudio (binário)
 
-Blocos de 20 ms de PCM a partir do `listen_start`. O tablet continua enviando até receber `state "pensando"` ou `state "ocioso"`; o que chegar depois disso é descartado. Para o Whisper, o servidor recorta o áudio em volta da fala detectada (300 ms antes, 200 ms depois).
+Blocos de 20 ms de PCM a partir do `listen_start` (no modo `palavra`, o tempo todo, exceto enquanto toca a voz do robô). O tablet continua enviando até receber `state "pensando"` ou `state "ocioso"`; o que chegar depois disso é descartado. Para o Whisper, o servidor recorta o áudio em volta da fala detectada (300 ms antes, 200 ms depois).
 
 ### `listen_stop`
 
@@ -129,11 +167,12 @@ A cada 15 s. `t` é opcional e volta igual no `pong`. Sem nenhuma mensagem do ta
   "type": "hello",
   "version": 1,
   "session_id": "3f2c9a7e",
-  "audio": {"format": "pcm_s16le", "sample_rate": 22050, "channels": 1}
+  "audio": {"format": "pcm_s16le", "sample_rate": 22050, "channels": 1},
+  "activation": "toque"
 }
 ```
 
-`audio` descreve o áudio que o servidor vai enviar.
+`audio` descreve o áudio que o servidor vai enviar. `activation` é o modo de ativação (`toque` ou `palavra`, ver "Ativação: toque ou palavra").
 
 ### `state`
 
@@ -198,7 +237,7 @@ Emoção a sobrepor ao estado do rosto durante a resposta. Valores: `neutro`, `f
   - `antes` (padrão): a própria requisição da fala oferece a ferramenta e o prompt pede que ela seja chamada antes de qualquer palavra da resposta.
   - `paralelo`: uma requisição própria, em paralelo com a fala, obriga a chamada.
 - **Valor padrão:** o servidor envia `neutro` quando o LLM não chama a ferramenta, devolve um valor fora da lista ou falha. No modo `antes`, isso acontece se a primeira frase ficar pronta sem que a ferramenta tenha sido chamada; no modo `paralelo`, se a emoção não chegar em até `PEGASUS_EMOCAO_ESPERA_MS` (padrão 1000 ms) depois da primeira frase pronta. Uma emoção que chegue depois disso é descartada.
-- **Duração:** a emoção vale até o próximo `listen_start` ou até 10 s depois de o rosto voltar a `ocioso` com o áudio da resposta já tocado; então o rosto volta a `neutro`. O app não zera a emoção no próprio `state "ocioso"` porque o áudio da resposta ainda está tocando nesse momento (o servidor envia mais rápido do que toca). Turnos sem resposta (`stt` vazio, `error`, `abort` antes do primeiro áudio) não têm `emotion`.
+- **Duração:** a emoção vale até o próximo `listen_start` ou até 10 s depois de o rosto voltar a `ocioso` com o áudio da resposta já tocado; então o rosto volta a `neutro`. O app não zera a emoção no próprio `state "ocioso"` porque o áudio da resposta ainda está tocando nesse momento (o servidor envia mais rápido do que toca). Turnos sem resposta (`stt` vazio, `error`, `abort` antes do primeiro áudio) e o "Oi?" da palavra de ativação não têm `emotion`.
 - **Texto limpo:** o texto de `tts_start` e o áudio nunca contêm marcações de emoção nem de ferramenta. O servidor encerra a fala na primeira imitação de chamada escrita pelo LLM (`<tool_call>`, `definir_emocao(...)`, `{"emocao": ...}`) e remove marcas como `[feliz]` ou `*sorri*`, emojis e símbolos de markdown antes da síntese.
 
 ## Fechamento

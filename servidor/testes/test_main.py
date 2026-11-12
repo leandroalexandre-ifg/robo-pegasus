@@ -387,3 +387,119 @@ def test_abort_durante_o_tts_responde_na_hora(cliente, pipeline, monkeypatch):
         ws.send_json({"type": "abort"})
         assert ws.receive_json() == {"type": "state", "state": "ocioso"}
         assert time.perf_counter() - inicio < 0.5
+
+
+def test_hello_informa_o_modo_de_ativacao(cliente):
+    with cliente.websocket_connect("/ws") as ws:
+        ws.send_json(_hello())
+        assert ws.receive_json()["activation"] == "toque"
+
+
+@pytest.fixture
+def escuta_continua(monkeypatch, pipeline):
+    """Servidor no modo palavra, com VAD falso e transcrições em sequência."""
+    monkeypatch.setenv("PEGASUS_ATIVACAO", "palavra")
+    monkeypatch.setattr(sessao_mod, "DetectorFala", _DetectorFalso)
+    falas = pipeline["falas"] = []
+    transcritos = pipeline["transcritos"] = []
+
+    async def transcrever(audio, config):
+        transcritos.append(len(audio) / 16_000)
+        return falas.pop(0)
+
+    monkeypatch.setattr(stt, "transcrever", transcrever)
+    with TestClient(main.app) as c:
+        yield c
+
+
+def _conectar_continuo(ws):
+    ws.send_json(_hello())
+    assert ws.receive_json()["activation"] == "palavra"
+    assert ws.receive_json() == {"type": "state", "state": "ocioso"}
+
+
+def _nada_mais_foi_enviado(ws):
+    ws.send_json({"type": "ping", "t": 7})
+    assert ws.receive_json() == {"type": "pong", "t": 7}
+
+
+def test_palavra_com_pergunta_responde_sem_listen_start(escuta_continua, pipeline):
+    pipeline["falas"].append("Pegasus, qual é o seu nome?")
+    with escuta_continua.websocket_connect("/ws") as ws:
+        _conectar_continuo(ws)
+        _enviar_audio(ws, 3.0)  # uma fala de 0,5 s a 1,5 s; o resto é silêncio
+        recebidas = _receber_ate_ocioso(ws)
+    assert _tipos(recebidas)[:4] == ["pensando", "stt", "emotion", "falando"]
+    assert recebidas[1] == {"type": "stt", "text": "qual é o seu nome?"}
+    assert pipeline["transcritos"] == [pytest.approx(1.5)]  # recortada com as margens
+    assert pipeline["historicos"] == [[]]
+
+
+def test_fala_sem_a_palavra_e_descartada_sem_rastro(escuta_continua, pipeline, caplog):
+    caplog.set_level("DEBUG")
+    pipeline["falas"].append("conversa particular na sala")
+    with escuta_continua.websocket_connect("/ws") as ws:
+        _conectar_continuo(ws)
+        _enviar_audio(ws, 3.0)
+        _nada_mais_foi_enviado(ws)
+    assert len(pipeline["transcritos"]) == 1  # a fala foi verificada...
+    assert "historicos" not in pipeline  # ...mas não chegou ao LLM
+    assert "particular" not in caplog.text
+
+
+def test_so_a_palavra_responde_oi_e_abre_a_escuta(escuta_continua, pipeline):
+    pipeline["falas"] += ["Pegasus.", "que horas são?"]
+    with escuta_continua.websocket_connect("/ws") as ws:
+        _conectar_continuo(ws)
+        _enviar_audio(ws, 2.2)  # fim decidido aos 2,1 s
+        recebidas = []
+        while (m := ws.receive()).get("text") is None or json.loads(m["text"]) != {
+            "type": "state",
+            "state": "ouvindo",
+        }:
+            recebidas.append(("audio", 0) if m.get("bytes") else json.loads(m["text"]))
+        assert _tipos(recebidas)[:2] == ["falando", "tts_start"]
+        assert recebidas[1]["text"] == "Oi?"
+        assert _tipos(recebidas)[-1] == "tts_end"
+        assert "emotion" not in _tipos(recebidas)
+        # a pergunta vem sem a palavra, na escuta aberta pelo "Oi?"
+        _enviar_audio(ws, 3.0)
+        respostas = _receber_ate_ocioso(ws)
+    assert respostas[1] == {"type": "stt", "text": "que horas são?"}
+    assert pipeline["historicos"] == [[]]
+
+
+def test_abort_durante_a_verificacao_descarta_a_fala(escuta_continua, pipeline, monkeypatch):
+    async def transcrever_lento(audio, config):
+        await asyncio.sleep(0.3)
+        return "Pegasus, me ouve?"
+
+    monkeypatch.setattr(stt, "transcrever", transcrever_lento)
+    with escuta_continua.websocket_connect("/ws") as ws:
+        _conectar_continuo(ws)
+        _enviar_audio(ws, 2.2)
+        ws.send_json({"type": "abort"})
+        assert ws.receive_json() == {"type": "state", "state": "ocioso"}
+        time.sleep(0.4)
+        _nada_mais_foi_enviado(ws)
+    assert "historicos" not in pipeline
+
+
+def test_modo_toque_ignora_audio_em_ocioso(cliente, pipeline, monkeypatch):
+    monkeypatch.setattr(sessao_mod, "DetectorFala", _DetectorFalso)
+    with cliente.websocket_connect("/ws") as ws:
+        _conectar(ws)
+        _enviar_audio(ws, 3.0)
+        _nada_mais_foi_enviado(ws)
+    assert "audio_s" not in pipeline
+
+
+def test_silencio_longo_antes_da_fala_nao_acumula_audio(escuta_continua, pipeline, monkeypatch):
+    monkeypatch.setattr(_DetectorFalso, "roteiro", (6.0, 7.0, 7.6))
+    pipeline["falas"].append("Pegasus, oi")
+    with escuta_continua.websocket_connect("/ws") as ws:
+        _conectar_continuo(ws)
+        _enviar_audio(ws, 7.7)
+        assert ws.receive_json() == {"type": "state", "state": "pensando"}
+    # só a fala e as margens, mesmo depois de 6 s de silêncio guardado e cortado
+    assert pipeline["transcritos"] == [pytest.approx(1.5)]
