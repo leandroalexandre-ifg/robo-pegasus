@@ -53,6 +53,13 @@ def test_modo_da_emocao():
         carregar_config({"PEGASUS_EMOCAO_MODO": "depois"})
 
 
+def test_modo_da_ativacao():
+    assert carregar_config({}).ativacao == "toque"
+    assert carregar_config({"PEGASUS_ATIVACAO": "palavra"}).ativacao == "palavra"
+    with pytest.raises(ValueError, match="PEGASUS_ATIVACAO"):
+        carregar_config({"PEGASUS_ATIVACAO": "voz"})
+
+
 def test_resumo_publico_sem_segredos():
     c = carregar_config(
         {
@@ -64,6 +71,7 @@ def test_resumo_publico_sem_segredos():
     )
     resumo = resumo_publico(c)
     assert resumo == {
+        "ativacao": "toque",
         "emocao_modo": "paralelo",
         "llm_modelo": "qwen-teste",
         "api": "127.0.0.1:8100",

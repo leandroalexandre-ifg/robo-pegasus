@@ -42,6 +42,9 @@ class Config:
     vad_silencio_s: float  # silêncio que encerra a fala
     vad_sem_fala_s: float  # escuta sem nenhuma fala que volta a ocioso
 
+    # Como a escuta começa: "toque" (listen_start) ou "palavra" ("Pegasus", em escuta contínua)
+    ativacao: str
+
     # Servidor WebSocket
     api_host: str
     api_porta: int
@@ -54,6 +57,15 @@ MODOS_EMOCAO = ("antes", "paralelo")
 def _modo_emocao(valor: str) -> str:
     if valor not in MODOS_EMOCAO:
         raise ValueError(f"PEGASUS_EMOCAO_MODO deve ser um de {MODOS_EMOCAO}, não {valor!r}")
+    return valor
+
+
+MODOS_ATIVACAO = ("toque", "palavra")
+
+
+def _modo_ativacao(valor: str) -> str:
+    if valor not in MODOS_ATIVACAO:
+        raise ValueError(f"PEGASUS_ATIVACAO deve ser um de {MODOS_ATIVACAO}, não {valor!r}")
     return valor
 
 
@@ -83,6 +95,7 @@ def carregar_config(ambiente: dict[str, str] | None = None) -> Config:
         vad_limiar=float(env.get("PEGASUS_VAD_LIMIAR", "0.5")),
         vad_silencio_s=int(env.get("PEGASUS_VAD_SILENCIO_MS", "600")) / 1000,
         vad_sem_fala_s=int(env.get("PEGASUS_VAD_SEM_FALA_MS", "8000")) / 1000,
+        ativacao=_modo_ativacao(env.get("PEGASUS_ATIVACAO", "toque")),
         api_host=env.get("PEGASUS_HOST", "127.0.0.1"),
         api_porta=int(env.get("PEGASUS_PORTA_API", "8100")),
         tokens=frozenset(t.strip() for t in env.get("PEGASUS_TOKENS", "").split(",") if t.strip()),
@@ -95,6 +108,7 @@ def resumo_publico(config: Config) -> dict[str, object]:
     if whisper == "cuda":
         whisper = f"cuda (GPU{config.whisper_gpu})"
     resumo: dict[str, object] = {
+        "ativacao": config.ativacao,
         "emocao_modo": config.emocao_modo,
         "llm_modelo": config.llm_modelo or "(primeiro de /v1/models)",
         "api": f"{config.api_host}:{config.api_porta}",
