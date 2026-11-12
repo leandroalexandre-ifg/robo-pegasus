@@ -1,6 +1,8 @@
 # Robô Pegasus
 
-Repositório: `robo-pegasus`. Robô conversacional inspirado no Xiaozhi ESP32: um app Flutter num tablet Android mostra um rosto animado (olhos e boca) e conversa por voz em português. Toda a IA roda num servidor próprio com uma RTX 5090 (32 GB). O robô não tem movimento, motores nem sensores externos.
+Repositório: https://github.com/leandroalexandre-ifg/robo-pegasus (branch principal: `main`). Pasta local: `Robo-Pegasus`.
+
+Robô conversacional inspirado no Xiaozhi ESP32: um app Flutter num tablet Android mostra um rosto animado (olhos e boca) e conversa por voz em português. Toda a IA roda num servidor próprio com uma RTX 5090 (32 GB). O robô não tem movimento, motores nem sensores externos.
 
 ## Idioma e convenções
 
