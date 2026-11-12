@@ -1,6 +1,7 @@
 """Estado de um tablet conectado e execução dos seus turnos de conversa."""
 
 import asyncio
+import collections
 import contextlib
 import json
 import logging
@@ -37,6 +38,10 @@ class Sessao:
         self._vad: DetectorFala | None = None
         self._turno: asyncio.Task | None = None
         self._frase_aberta = False
+        # Memória curta: (fala do usuário, resposta) dos últimos turnos desta conexão.
+        self.historico: collections.deque[tuple[str, str]] = collections.deque(
+            maxlen=config.memoria_turnos
+        )
         # O receptor de mensagens e a tarefa do turno enviam pela mesma conexão.
         self._envio = asyncio.Lock()
 
@@ -120,15 +125,30 @@ class Sessao:
             self._frase_aberta = False
             await self.enviar_json({"type": "tts_end"})
 
+    async def encerrar(self) -> None:
+        """Fim da conexão: interrompe o turno e descarta a memória da conversa."""
+        try:
+            await self.cancelar_turno()
+        finally:
+            self.historico.clear()
+
+    def _lembrar(self, turno: Turno) -> None:
+        # Guarda o que o robô chegou a dizer, mesmo se o turno foi interrompido.
+        if turno.texto_usuario and turno.frases:
+            self.historico.append((turno.texto_usuario, turno.resposta))
+
     async def _responder(self, pcm: bytes, turno: Turno) -> None:
         audio = np.frombuffer(pcm, dtype=np.int16).astype(np.float32) / 32768.0
+        memoria = tuple(self.historico)
+        turno.memoria = len(memoria)
         try:
             texto = await transcrever(audio, self.config, turno)
             await self.enviar_json({"type": "stt", "text": texto})
             if texto:
-                await self._falar(texto, turno)
+                await self._falar(texto, turno, memoria)
             await self.mudar_estado("ocioso")
         except asyncio.CancelledError:
+            self._lembrar(turno)
             raise
         except openai.APIError as e:
             log.error("sessão %s: falha no LLM: %s", self.id, e)
@@ -137,11 +157,12 @@ class Sessao:
             log.exception("sessão %s: falha no turno", self.id)
             await self._falhar("Ocorreu um erro no servidor.")
         else:
+            self._lembrar(turno)
             self._registrar(turno, len(audio) / TAXA_ENTRADA)
 
-    async def _falar(self, texto: str, turno: Turno) -> None:
+    async def _falar(self, texto: str, turno: Turno, memoria: tuple[tuple[str, str], ...]) -> None:
         passo = None
-        async for bloco in falar(texto, self.config, turno):
+        async for bloco in falar(texto, self.config, turno, memoria):
             if isinstance(bloco, Emocao):
                 await self.enviar_json({"type": "emotion", "emotion": bloco.nome})
                 continue
@@ -183,6 +204,7 @@ class Sessao:
                     "audio_s": round(duracao_s, 2),
                     "fim_escuta": turno.fim_escuta,
                     "frases": len(turno.frases),
+                    "memoria": turno.memoria,
                     "emocoes": turno.emocoes,
                     "ms": medidas,
                 },

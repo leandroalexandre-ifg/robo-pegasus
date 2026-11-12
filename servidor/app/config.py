@@ -18,6 +18,7 @@ class Config:
     llm_max_tokens: int
     llm_temperatura: float
     emocao_modo: str  # "antes": a fala chama a ferramenta; "paralelo": requisição própria
+    memoria_turnos: int  # turnos anteriores da sessão enviados ao LLM
     emocao_espera_s: float  # quanto o primeiro áudio pode esperar pela emoção (paralelo)
 
     # Whisper (faster-whisper)
@@ -64,6 +65,7 @@ def carregar_config(ambiente: dict[str, str] | None = None) -> Config:
         llm_modelo=env.get("PEGASUS_MODELO") or None,
         llm_max_tokens=int(env.get("PEGASUS_LLM_MAX_TOKENS", "150")),
         llm_temperatura=float(env.get("PEGASUS_LLM_TEMPERATURA", "0.7")),
+        memoria_turnos=int(env.get("PEGASUS_MEMORIA_TURNOS", "6")),
         emocao_modo=_modo_emocao(env.get("PEGASUS_EMOCAO_MODO", "antes")),
         emocao_espera_s=int(env.get("PEGASUS_EMOCAO_ESPERA_MS", "1000")) / 1000,
         whisper_modelo=env.get("PEGASUS_WHISPER_MODELO", "large-v3-turbo"),
@@ -99,6 +101,7 @@ def resumo_publico(config: Config) -> dict[str, object]:
         "voz": config.piper_voz.stem,
         "persona": str(config.persona_arquivo),
         "vad_silencio_ms": round(config.vad_silencio_s * 1000),
+        "memoria_turnos": config.memoria_turnos,
         "whisper": f"{config.whisper_modelo}, {whisper}, {config.whisper_precisao}",
     }
     if config.emocao_modo == "paralelo":

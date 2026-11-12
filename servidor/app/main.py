@@ -135,7 +135,7 @@ async def conexao(ws: WebSocket) -> None:
         await _atender(ws, sessao)
     finally:
         with contextlib.suppress(Exception):
-            await sessao.cancelar_turno()
+            await sessao.encerrar()
         log.info("sessão %s: desconectada", sessao.id)
 
 

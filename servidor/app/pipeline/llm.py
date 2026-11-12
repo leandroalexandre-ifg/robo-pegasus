@@ -2,7 +2,7 @@
 
 import logging
 import re
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Sequence
 from contextlib import aclosing
 
 from openai import AsyncOpenAI
@@ -30,11 +30,14 @@ async def _preparar(config: Config) -> tuple[AsyncOpenAI, str]:
     return _cliente, _modelo
 
 
-def _mensagens(texto_usuario: str, sistema: str) -> list[dict]:
-    return [
-        {"role": "system", "content": sistema},
-        {"role": "user", "content": texto_usuario},
-    ]
+Historico = Sequence[tuple[str, str]]  # (fala do usuário, resposta do robô), do mais antigo
+
+
+def _mensagens(texto_usuario: str, sistema: str, historico: Historico = ()) -> list[dict]:
+    mensagens = [{"role": "system", "content": sistema}]
+    for usuario, robo in historico:
+        mensagens += [{"role": "user", "content": usuario}, {"role": "assistant", "content": robo}]
+    return mensagens + [{"role": "user", "content": texto_usuario}]
 
 
 async def _fluxo(
@@ -108,25 +111,30 @@ def _emocoes(chamadas: dict[int, dict]) -> list[Emocao]:
     return emocoes
 
 
-async def gerar(texto_usuario: str, config: Config) -> AsyncIterator[str | Emocao]:
+async def gerar(
+    texto_usuario: str, config: Config, historico: Historico = ()
+) -> AsyncIterator[str | Emocao]:
     """Devolve a fala em pedaços de texto, à medida que o LLM gera.
 
     No modo de emoção "antes", a requisição oferece a ferramenta definir_emocao e o
     prompt pede que ela seja chamada antes da resposta; a Emocao sai no fluxo assim
     que a chamada termina. No modo "paralelo", o fluxo é só texto, sem ferramentas,
-    e a emoção vem de escolher_emocao."""
+    e a emoção vem de escolher_emocao. `historico` são os turnos anteriores da sessão."""
     cliente, modelo = await _preparar(config)
     if config.emocao_modo == "paralelo":
         async for pedaco in _texto_limpo(
             _fluxo(
-                cliente, modelo, _mensagens(texto_usuario, persona.prompt_sistema(config)), config
+                cliente,
+                modelo,
+                _mensagens(texto_usuario, persona.prompt_sistema(config), historico),
+                config,
             )
         ):
             yield pedaco
         return
 
     sistema = f"{persona.prompt_sistema(config)}\n{persona.PROMPT_EMOCAO}"
-    mensagens = _mensagens(texto_usuario, sistema)
+    mensagens = _mensagens(texto_usuario, sistema, historico)
     chamadas: dict[int, dict] = {}
     falou = False
     async for pedaco in _texto_limpo(_fluxo(cliente, modelo, mensagens, config, chamadas)):
@@ -145,7 +153,9 @@ async def gerar(texto_usuario: str, config: Config) -> AsyncIterator[str | Emoca
             yield pedaco
 
 
-async def escolher_emocao(texto_usuario: str, config: Config) -> Emocao | None:
+async def escolher_emocao(
+    texto_usuario: str, config: Config, historico: Historico = ()
+) -> Emocao | None:
     """Modo "paralelo": pede ao LLM a chamada de definir_emocao para a fala do usuário.
 
     tool_choice nomeado obriga a chamada; devolve None se a resposta não trouxer uma
@@ -153,7 +163,7 @@ async def escolher_emocao(texto_usuario: str, config: Config) -> Emocao | None:
     cliente, modelo = await _preparar(config)
     resposta = await cliente.chat.completions.create(
         model=modelo,
-        messages=_mensagens(texto_usuario, persona.prompt_sistema(config)),
+        messages=_mensagens(texto_usuario, persona.prompt_sistema(config), historico),
         tools=[FERRAMENTA],
         tool_choice={"type": "function", "function": {"name": FERRAMENTA["function"]["name"]}},
         # O Qwen3.8 escreve a chamada no formato XML: ~32 tokens.

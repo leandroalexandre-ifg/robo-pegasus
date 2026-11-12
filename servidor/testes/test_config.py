@@ -70,6 +70,7 @@ def test_resumo_publico_sem_segredos():
         "voz": "pt_BR-faber-medium",
         "persona": str(SERVIDOR / "persona.toml"),
         "vad_silencio_ms": 600,
+        "memoria_turnos": 6,
         "whisper": "large-v3-turbo, cuda (GPU1), float16",
         "emocao_espera_ms": 1000,
     }

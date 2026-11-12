@@ -12,6 +12,7 @@ from app.config import Config
 from app.pipeline import llm, stt, tts
 from app.pipeline.emocao import Emocao, limpar_para_voz
 from app.pipeline.frases import cortar_frases
+from app.pipeline.llm import Historico
 
 
 @dataclass
@@ -33,6 +34,7 @@ class Turno:
     tts_s: float = 0.0  # soma do tempo do Piper em todas as frases
     fim_escuta: str = ""  # o que encerrou a escuta: vad, listen_stop ou limite
     vad_s: float = 0.0  # silêncio esperado depois da fala até decidir que ela acabou
+    memoria: int = 0  # turnos anteriores enviados ao LLM
     _inicio: float = field(default_factory=time.perf_counter, repr=False)
 
     def marcar(self, etapa: str) -> None:
@@ -48,16 +50,20 @@ NEUTRO = Emocao("neutro")
 log = logging.getLogger("pegasus.turno")
 
 
-async def _pedacos_medidos(texto: str, config: Config, turno: Turno) -> AsyncIterator[str | Emocao]:
-    async for pedaco in llm.gerar(texto, config):
+async def _pedacos_medidos(
+    texto: str, config: Config, turno: Turno, historico: Historico
+) -> AsyncIterator[str | Emocao]:
+    async for pedaco in llm.gerar(texto, config, historico):
         turno.marcar("emocao_llm" if isinstance(pedaco, Emocao) else "llm_primeiro_token")
         yield pedaco
     turno.marcar("llm_fim")
 
 
-async def _emocao_medida(texto: str, config: Config, turno: Turno) -> Emocao | None:
+async def _emocao_medida(
+    texto: str, config: Config, turno: Turno, historico: Historico
+) -> Emocao | None:
     try:
-        emocao = await llm.escolher_emocao(texto, config)
+        emocao = await llm.escolher_emocao(texto, config, historico)
     except Exception as e:  # sem emoção o turno segue, com neutro
         log.warning("falha ao escolher a emoção: %s", e)
         return None
@@ -87,7 +93,9 @@ def _registrar_emocao(emocao: Emocao, turno: Turno) -> Emocao:
     return emocao
 
 
-async def falar(texto: str, config: Config, turno: Turno) -> AsyncIterator[BlocoAudio | Emocao]:
+async def falar(
+    texto: str, config: Config, turno: Turno, historico: Historico = ()
+) -> AsyncIterator[BlocoAudio | Emocao]:
     """Gera a resposta ao texto do usuário: a emoção do rosto e, depois dela, um
     bloco de áudio por frase. A emoção vem sempre antes do primeiro áudio."""
     # Modo "paralelo": a emoção é pedida em requisição própria e costuma chegar
@@ -95,11 +103,11 @@ async def falar(texto: str, config: Config, turno: Turno) -> AsyncIterator[Bloco
     # fluxo da fala, se o LLM chamar a ferramenta antes de escrever.
     pedido = None
     if config.emocao_modo == "paralelo":
-        pedido = asyncio.create_task(_emocao_medida(texto, config, turno))
+        pedido = asyncio.create_task(_emocao_medida(texto, config, turno, historico))
     try:
         # Enquanto o Piper sintetiza uma frase, o vLLM continua gerando: os tokens
         # ficam no buffer da conexão até o laço voltar a ler.
-        async for item in cortar_frases(_pedacos_medidos(texto, config, turno)):
+        async for item in cortar_frases(_pedacos_medidos(texto, config, turno, historico)):
             if isinstance(item, Emocao):
                 if turno.emocoes:
                     log.info("emoção %s chegou depois do primeiro áudio; descartada", item.nome)

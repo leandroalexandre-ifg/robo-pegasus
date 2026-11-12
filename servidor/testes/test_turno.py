@@ -16,11 +16,11 @@ def _falsos(monkeypatch, transcricao, pedacos, emocao=FELIZ, atraso_emocao=0.0):
     async def transcrever(audio, config):
         return transcricao
 
-    async def gerar(texto, config):
+    async def gerar(texto, config, historico=()):
         for p in pedacos:
             yield p
 
-    async def escolher_emocao(texto, config):
+    async def escolher_emocao(texto, config, historico=()):
         pedidos_emocao.append(texto)
         await asyncio.sleep(atraso_emocao)
         if isinstance(emocao, Exception):

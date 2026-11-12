@@ -12,6 +12,12 @@ Este documento é a fonte da verdade do protocolo. Ao mudar o protocolo, atualiz
   - **quadros binários**: áudio PCM, sem cabeçalho.
 - Campos desconhecidos devem ser ignorados, para permitir evolução sem quebrar o outro lado.
 
+## Sessão e memória
+
+Cada conexão é uma sessão. O servidor guarda uma memória curta da conversa da sessão: os últimos `PEGASUS_MEMORIA_TURNOS` turnos (padrão 6), cada um com a fala do usuário e o que o robô respondeu, e os envia ao LLM a cada turno. Uma resposta interrompida entra na memória só com as frases que chegaram a ser sintetizadas; um turno sem resposta (sem fala reconhecida, erro, `abort` antes da primeira frase) não entra.
+
+A memória fica só na memória do processo e é descartada quando a conexão fecha. Ao reconectar, o tablet começa uma conversa nova.
+
 ## Áudio
 
 | Sentido | Formato | Blocos |

@@ -31,7 +31,8 @@ def pipeline(monkeypatch):
         estado["audio_s"] = len(audio) / 16_000
         return estado["transcricao"]
 
-    async def gerar(texto, config):
+    async def gerar(texto, config, historico=()):
+        estado.setdefault("historicos", []).append(list(historico))
         for p in estado["pedacos"]:
             if isinstance(p, Exception):
                 raise p
@@ -294,3 +295,42 @@ def test_escuta_sem_fala_volta_a_ocioso(monkeypatch, pipeline):
         _enviar_audio(ws, 0.5)  # silêncio (o Silero de verdade não vê fala)
         assert ws.receive_json() == {"type": "state", "state": "ocioso"}
     assert "audio_s" not in pipeline  # nada foi transcrito
+
+
+def _turno(ws, transcricao, pipeline):
+    pipeline["transcricao"] = transcricao
+    _falar(ws)
+    return _receber_ate_ocioso(ws)
+
+
+def test_memoria_guarda_os_ultimos_turnos_da_conexao(monkeypatch, pipeline):
+    monkeypatch.setenv("PEGASUS_MEMORIA_TURNOS", "2")
+    pipeline["pedacos"] = ["Resposta."]
+    with TestClient(main.app) as c:
+        with c.websocket_connect("/ws") as ws:
+            _conectar(ws)
+            for fala in ("um", "dois", "três"):
+                _turno(ws, fala, pipeline)
+        with c.websocket_connect("/ws") as ws:  # nova conexão: memória vazia
+            _conectar(ws)
+            _turno(ws, "quatro", pipeline)
+    assert pipeline["historicos"] == [
+        [],
+        [("um", "Resposta.")],
+        [("um", "Resposta."), ("dois", "Resposta.")],
+        [],
+    ]
+
+
+def test_resposta_interrompida_fica_na_memoria_com_o_que_foi_dito(cliente, pipeline):
+    pipeline["pedacos"] = ["Primeira frase. ", None, "Nunca chega."]
+    with cliente.websocket_connect("/ws") as ws:
+        _conectar(ws)
+        _falar(ws)
+        while (m := ws.receive()).get("text") is None or json.loads(m["text"])["type"] != "tts_end":
+            pass
+        ws.send_json({"type": "abort"})
+        assert ws.receive_json() == {"type": "state", "state": "ocioso"}
+        pipeline["pedacos"] = ["Ok."]
+        _turno(ws, "e agora?", pipeline)
+    assert pipeline["historicos"][-1] == [("qual é o seu nome?", "Primeira frase.")]

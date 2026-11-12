@@ -164,3 +164,35 @@ def test_modo_antes_emocao_invalida_e_ignorada(cliente):
     respostas.append(_Fluxo([_texto("Oi.")]))
     assert _gerar("antes") == ["Oi."]
     assert len(pedidos) == 2  # a fala ainda vem, na segunda rodada
+
+
+def test_historico_entra_antes_da_fala_atual(cliente):
+    respostas, pedidos = cliente
+    respostas.append(_Fluxo([_texto("Leandro.")]))
+    config = carregar_config({"PEGASUS_EMOCAO_MODO": "paralelo"})
+    historico = [("Meu nome é Leandro.", "Prazer, Leandro!"), ("Tudo bem?", "Tudo ótimo.")]
+
+    async def coletar():
+        return [x async for x in llm.gerar("Qual é o meu nome?", config, historico)]
+
+    asyncio.run(coletar())
+    papeis = [(m["role"], m["content"]) for m in pedidos[0]["messages"][1:]]
+    assert papeis == [
+        ("user", "Meu nome é Leandro."),
+        ("assistant", "Prazer, Leandro!"),
+        ("user", "Tudo bem?"),
+        ("assistant", "Tudo ótimo."),
+        ("user", "Qual é o meu nome?"),
+    ]
+
+
+def test_escolher_emocao_tambem_ve_o_historico(cliente):
+    respostas, pedidos = cliente
+    respostas.append(_resposta_ferramenta(("definir_emocao", '{"emocao": "feliz"}')))
+    historico = [("Ganhei!", "Parabéns!")]
+    asyncio.run(llm.escolher_emocao("De novo!", carregar_config({}), historico))
+    assert [m["content"] for m in pedidos[0]["messages"][1:]] == [
+        "Ganhei!",
+        "Parabéns!",
+        "De novo!",
+    ]
