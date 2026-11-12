@@ -16,7 +16,8 @@ class Config:
     llm_modelo: str | None  # None: usa o primeiro modelo de /v1/models
     llm_max_tokens: int
     llm_temperatura: float
-    emocao_espera_s: float  # quanto o primeiro áudio pode esperar pela emoção
+    emocao_modo: str  # "antes": a fala chama a ferramenta; "paralelo": requisição própria
+    emocao_espera_s: float  # quanto o primeiro áudio pode esperar pela emoção (paralelo)
 
     # Whisper (faster-whisper)
     whisper_modelo: str
@@ -37,6 +38,15 @@ class Config:
     tokens: frozenset[str] = field(repr=False)  # aceitos no hello; vazio recusa todos
 
 
+MODOS_EMOCAO = ("antes", "paralelo")
+
+
+def _modo_emocao(valor: str) -> str:
+    if valor not in MODOS_EMOCAO:
+        raise ValueError(f"PEGASUS_EMOCAO_MODO deve ser um de {MODOS_EMOCAO}, não {valor!r}")
+    return valor
+
+
 def carregar_config(ambiente: dict[str, str] | None = None) -> Config:
     env = os.environ if ambiente is None else ambiente
     return Config(
@@ -45,6 +55,7 @@ def carregar_config(ambiente: dict[str, str] | None = None) -> Config:
         llm_modelo=env.get("PEGASUS_MODELO") or None,
         llm_max_tokens=int(env.get("PEGASUS_LLM_MAX_TOKENS", "150")),
         llm_temperatura=float(env.get("PEGASUS_LLM_TEMPERATURA", "0.7")),
+        emocao_modo=_modo_emocao(env.get("PEGASUS_EMOCAO_MODO", "antes")),
         emocao_espera_s=int(env.get("PEGASUS_EMOCAO_ESPERA_MS", "1000")) / 1000,
         whisper_modelo=env.get("PEGASUS_WHISPER_MODELO", "large-v3-turbo"),
         whisper_dispositivo=env.get("PEGASUS_WHISPER_DISPOSITIVO", "cuda"),

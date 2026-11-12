@@ -1,5 +1,7 @@
 from pathlib import Path
 
+import pytest
+
 from app.config import MODELOS, carregar_config
 
 
@@ -42,3 +44,10 @@ def test_servidor_e_tokens():
 def test_segredos_fora_do_repr():
     c = carregar_config({"PEGASUS_TOKENS": "segredo-tablet", "PEGASUS_LLM_CHAVE": "segredo-llm"})
     assert "segredo" not in repr(c)
+
+
+def test_modo_da_emocao():
+    assert carregar_config({}).emocao_modo == "antes"
+    assert carregar_config({"PEGASUS_EMOCAO_MODO": "paralelo"}).emocao_modo == "paralelo"
+    with pytest.raises(ValueError, match="PEGASUS_EMOCAO_MODO"):
+        carregar_config({"PEGASUS_EMOCAO_MODO": "depois"})
