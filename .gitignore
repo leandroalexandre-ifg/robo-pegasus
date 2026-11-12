@@ -1,0 +1,15 @@
+# Modelos baixados (Hugging Face, Piper)
+modelos/
+
+# Ambiente Python
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+
+# Configuração local com segredos
+.env
+
+# macOS
+.DS_Store
