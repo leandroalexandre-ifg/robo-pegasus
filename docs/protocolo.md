@@ -104,7 +104,13 @@ Opcional: encerra a escuta antes de o VAD decidir (por exemplo, por um toque na 
 {"type": "abort"}
 ```
 
-Cancela a escuta ou a resposta em andamento. O servidor para de enviar áudio, fecha a frase aberta com `tts_end` e envia `state "ocioso"`. O tablet deve descartar o áudio ainda não tocado.
+Cancela a escuta ou a resposta em andamento, na hora:
+
+- a geração do LLM é interrompida (o servidor fecha o fluxo e o vLLM aborta a requisição), assim como o pedido de emoção;
+- o Piper para antes do próximo bloco de áudio, e nenhum áudio novo é enviado;
+- o servidor fecha a frase aberta com `tts_end` e envia `state "ocioso"`, sem esperar mais que 500 ms pela limpeza do turno.
+
+O servidor envia o áudio de cada frase mais rápido que o tempo real, então o tablet pode já ter recebido áudio que ainda não tocou: ao enviar `abort`, ele deve parar a reprodução e descartar esse áudio. O que o robô chegou a dizer fica na memória da sessão.
 
 ### `ping`
 

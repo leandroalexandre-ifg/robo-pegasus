@@ -1,5 +1,6 @@
 import asyncio
 import json
+import time
 
 import httpx
 import openai
@@ -334,3 +335,55 @@ def test_resposta_interrompida_fica_na_memoria_com_o_que_foi_dito(cliente, pipel
         pipeline["pedacos"] = ["Ok."]
         _turno(ws, "e agora?", pipeline)
     assert pipeline["historicos"][-1] == [("qual é o seu nome?", "Primeira frase.")]
+
+
+def test_abort_fecha_o_fluxo_do_llm_e_cancela_a_emocao(cliente, pipeline, monkeypatch):
+    fechou, emocao_cancelada = [], []
+
+    async def gerar(texto, config, historico=()):
+        try:
+            yield "Primeira frase. "
+            await asyncio.sleep(30)  # o LLM ainda gerando quando chega o abort
+            yield "Nunca chega."
+        finally:
+            fechou.append(True)
+
+    async def escolher_emocao(texto, config, historico=()):
+        try:
+            await asyncio.sleep(30)
+        except asyncio.CancelledError:
+            emocao_cancelada.append(True)
+            raise
+
+    monkeypatch.setenv("PEGASUS_EMOCAO_MODO", "paralelo")
+    monkeypatch.setenv("PEGASUS_EMOCAO_ESPERA_MS", "10")
+    monkeypatch.setattr(llm, "gerar", gerar)
+    monkeypatch.setattr(llm, "escolher_emocao", escolher_emocao)
+    with TestClient(main.app) as c, c.websocket_connect("/ws") as ws:
+        _conectar(ws)
+        _falar(ws)
+        while (m := ws.receive()).get("text") is None or json.loads(m["text"])["type"] != "tts_end":
+            pass
+        inicio = time.perf_counter()
+        ws.send_json({"type": "abort"})
+        assert ws.receive_json() == {"type": "state", "state": "ocioso"}
+        assert time.perf_counter() - inicio < 0.5
+    assert fechou == [True]
+    assert emocao_cancelada == [True]
+
+
+def test_abort_durante_o_tts_responde_na_hora(cliente, pipeline, monkeypatch):
+    async def sintetizar_lento(texto, config):
+        await asyncio.sleep(30)
+        return b"", TAXA
+
+    monkeypatch.setattr(tts, "sintetizar", sintetizar_lento)
+    with cliente.websocket_connect("/ws") as ws:
+        _conectar(ws)
+        _falar(ws)
+        # pensando, stt, emotion; o Piper fica preso na primeira frase
+        assert [ws.receive_json()["type"] for _ in range(3)] == ["state", "stt", "emotion"]
+        inicio = time.perf_counter()
+        ws.send_json({"type": "abort"})
+        assert ws.receive_json() == {"type": "state", "state": "ocioso"}
+        assert time.perf_counter() - inicio < 0.5
