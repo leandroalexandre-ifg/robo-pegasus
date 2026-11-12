@@ -33,6 +33,12 @@ class Robo {
 
   final estado = ValueNotifier<EstadoRosto>(EstadoRosto.desconectado);
 
+  /// Emoção sobreposta ao estado. Volta a `neutro` num novo `listen_start`
+  /// ou depois de [_duracaoEmocao] com o robô ocioso.
+  final emocao = ValueNotifier<Emocao>(Emocao.neutro);
+  Timer? _timerEmocao;
+  static const _duracaoEmocao = Duration(seconds: 10);
+
   /// Texto discreto no rodapé: o que foi entendido, erro ou motivo da queda.
   final legenda = ValueNotifier<String?>(null);
 
@@ -74,6 +80,8 @@ class Robo {
     _reproducao.descartar();
     _aguardandoEscuta = true;
     legenda.value = null;
+    _timerEmocao?.cancel();
+    emocao.value = Emocao.neutro;
     _cliente.enviarTexto(listenStart());
     final ok = await _captura.iniciar(_cliente.enviarAudio);
     if (!ok) {
@@ -84,6 +92,7 @@ class Robo {
   }
 
   Future<void> liberar() async {
+    _timerEmocao?.cancel();
     for (final a in _assinaturas) {
       await a.cancel();
     }
@@ -110,6 +119,12 @@ class Robo {
     switch (msg) {
       case Estado(:final estado):
         _servidor = estado;
+        _timerEmocao?.cancel();
+        if (estado == EstadoServidor.ocioso) {
+          _timerEmocao = Timer(_duracaoEmocao, () {
+            emocao.value = Emocao.neutro;
+          });
+        }
         if (estado == EstadoServidor.ouvindo) {
           _aguardandoEscuta = false;
         } else if (!_aguardandoEscuta && _captura.ativa) {
@@ -122,6 +137,8 @@ class Robo {
         if (taxa != null) unawaited(_reproducao.preparar(taxa));
       case Erro(:final mensagem):
         legenda.value = mensagem;
+      case MudaEmocao(emocao: final e):
+        emocao.value = e;
       case HelloServidor() || TtsEnd() || Pong():
         break;
     }

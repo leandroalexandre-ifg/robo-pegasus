@@ -57,11 +57,21 @@ void main() {
     expect((erro as Erro).mensagem, 'Falhou.');
   });
 
+  test('emotion com cada emoção', () {
+    for (final e in Emocao.values) {
+      final msg = MensagemServidor.decodificar(
+        '{"type":"emotion","emotion":"${e.name}"}',
+      );
+      expect((msg as MudaEmocao).emocao, e);
+    }
+  });
+
   test('tipos, estados e campos desconhecidos são ignorados', () {
     expect(
-      MensagemServidor.decodificar('{"type":"emotion","emotion":"feliz"}'),
+      MensagemServidor.decodificar('{"type":"emotion","emotion":"eufórico"}'),
       isNull,
     );
+    expect(MensagemServidor.decodificar('{"type":"novidade"}'), isNull);
     expect(
       MensagemServidor.decodificar('{"type":"state","state":"dormindo"}'),
       isNull,

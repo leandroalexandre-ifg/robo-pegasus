@@ -170,7 +170,9 @@ Falha no turno (por exemplo, LLM desligado). A mensagem é em português e pode 
 {"type": "emotion", "emotion": "feliz"}
 ```
 
-Ainda não implementada. Virá da ferramenta `definir_emocao` do LLM. Emoções: `neutro`, `feliz`, `triste`, `surpreso`, `pensativo`, `bravo`.
+O app já trata esta mensagem; o servidor ainda não a envia. Virá da ferramenta `definir_emocao` do LLM. Emoções: `neutro`, `feliz`, `triste`, `surpreso`, `pensativo`, `bravo`; outros valores são ignorados.
+
+No app, a emoção vale até o próximo `listen_start` ou até 10 s depois de o robô voltar a `ocioso`, quando o rosto volta a `neutro`.
 
 ## Fechamento
 

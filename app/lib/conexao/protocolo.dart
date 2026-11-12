@@ -22,6 +22,9 @@ const fechaTempo = 4008;
 /// Estados enviados pelo servidor em `state`.
 enum EstadoServidor { ocioso, ouvindo, pensando, falando }
 
+/// Emoções enviadas pelo servidor em `emotion`.
+enum Emocao { neutro, feliz, triste, surpreso, pensativo, bravo }
+
 String helloTablet({required String token, required String deviceId}) =>
     jsonEncode({
       'type': 'hello',
@@ -79,6 +82,12 @@ sealed class MensagemServidor {
         return const TtsEnd();
       case 'pong':
         return const Pong();
+      case 'emotion':
+        final nome = json['emotion'];
+        for (final e in Emocao.values) {
+          if (e.name == nome) return MudaEmocao(e);
+        }
+        return null;
       case 'error':
         return Erro('${json['message'] ?? 'Erro no servidor.'}');
       default:
@@ -120,4 +129,9 @@ class Pong extends MensagemServidor {
 class Erro extends MensagemServidor {
   const Erro(this.mensagem);
   final String mensagem;
+}
+
+class MudaEmocao extends MensagemServidor {
+  const MudaEmocao(this.emocao);
+  final Emocao emocao;
 }
