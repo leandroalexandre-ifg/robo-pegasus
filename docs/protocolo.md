@@ -174,8 +174,10 @@ Falha no turno (por exemplo, LLM desligado). A mensagem é em português e pode 
 Emoção a sobrepor ao estado do rosto durante a resposta. Valores: `neutro`, `feliz`, `triste`, `surpreso`, `pensativo`, `bravo`.
 
 - **Uma por turno com resposta, sempre antes do primeiro áudio:** chega depois de `stt` e antes de `state "falando"` e do primeiro `tts_start`. O app pode aplicá-la ao rosto antes de tocar qualquer som.
-- **Origem:** o LLM escolhe a emoção chamando a ferramenta `definir_emocao(emocao)`, numa requisição que corre em paralelo com a geração da fala. O servidor valida o valor contra a lista acima.
-- **Valor padrão:** se o LLM não chamar a ferramenta, devolver um valor fora da lista, falhar ou demorar mais que `PEGASUS_EMOCAO_ESPERA_MS` (padrão 1000 ms) contado a partir da primeira frase pronta, o servidor envia `neutro`. Uma emoção que chegue depois disso é descartada.
+- **Origem:** o LLM escolhe a emoção chamando a ferramenta `definir_emocao(emocao)`. O servidor valida o valor contra a lista acima. Há dois modos (`PEGASUS_EMOCAO_MODO`):
+  - `antes` (padrão): a própria requisição da fala oferece a ferramenta e o prompt pede que ela seja chamada antes de qualquer palavra da resposta.
+  - `paralelo`: uma requisição própria, em paralelo com a fala, obriga a chamada.
+- **Valor padrão:** o servidor envia `neutro` quando o LLM não chama a ferramenta, devolve um valor fora da lista ou falha. No modo `antes`, isso acontece se a primeira frase ficar pronta sem que a ferramenta tenha sido chamada; no modo `paralelo`, se a emoção não chegar em até `PEGASUS_EMOCAO_ESPERA_MS` (padrão 1000 ms) depois da primeira frase pronta. Uma emoção que chegue depois disso é descartada.
 - **Duração:** a emoção vale até o fim do turno; ao receber `state "ocioso"` o app volta o rosto a `neutro`. Turnos sem resposta (`stt` vazio, `error`, `abort` antes do primeiro áudio) não têm `emotion`.
 - **Texto limpo:** o texto de `tts_start` e o áudio nunca contêm marcações de emoção nem de ferramenta. O servidor encerra a fala na primeira imitação de chamada escrita pelo LLM (`<tool_call>`, `definir_emocao(...)`, `{"emocao": ...}`) e remove marcas como `[feliz]` ou `*sorri*`, emojis e símbolos de markdown antes da síntese.
 
