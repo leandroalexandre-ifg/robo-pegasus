@@ -16,6 +16,7 @@ class Config:
     llm_modelo: str | None  # None: usa o primeiro modelo de /v1/models
     llm_max_tokens: int
     llm_temperatura: float
+    emocao_espera_s: float  # quanto o primeiro áudio pode esperar pela emoção
 
     # Whisper (faster-whisper)
     whisper_modelo: str
@@ -44,6 +45,7 @@ def carregar_config(ambiente: dict[str, str] | None = None) -> Config:
         llm_modelo=env.get("PEGASUS_MODELO") or None,
         llm_max_tokens=int(env.get("PEGASUS_LLM_MAX_TOKENS", "150")),
         llm_temperatura=float(env.get("PEGASUS_LLM_TEMPERATURA", "0.7")),
+        emocao_espera_s=int(env.get("PEGASUS_EMOCAO_ESPERA_MS", "1000")) / 1000,
         whisper_modelo=env.get("PEGASUS_WHISPER_MODELO", "large-v3-turbo"),
         whisper_dispositivo=env.get("PEGASUS_WHISPER_DISPOSITIVO", "cuda"),
         whisper_gpu=env.get("PEGASUS_WHISPER_GPU", "1"),

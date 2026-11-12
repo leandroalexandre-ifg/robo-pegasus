@@ -34,11 +34,11 @@ Tablet                                   Servidor
   │ ── listen_stop ─────────────────────►  │
   │ ◄──────────────── state "pensando" ─── │
   │ ◄────────────────────── stt {text} ─── │
+  │ ◄──────────── emotion {"feliz"} ────── │   uma por turno, antes do 1º áudio
   │ ◄───────────────── state "falando" ─── │
   │ ◄─────────────── tts_start {frase} ─── │   ┐
   │ ◄══════════════ áudio PCM da frase ═══ │   │ uma vez por frase
   │ ◄──────────────────────── tts_end ──── │   ┘
-  │ ◄──────────── emotion {"feliz"} ────── │   (a qualquer momento entre stt e ocioso)
   │ ◄───────────────── state "ocioso" ──── │
 ```
 
@@ -171,12 +171,13 @@ Falha no turno (por exemplo, LLM desligado). A mensagem é em português e pode 
 {"type": "emotion", "emotion": "feliz"}
 ```
 
-Emoção a sobrepor ao estado do rosto. Valores: `neutro`, `feliz`, `triste`, `surpreso`, `pensativo`, `bravo`.
+Emoção a sobrepor ao estado do rosto durante a resposta. Valores: `neutro`, `feliz`, `triste`, `surpreso`, `pensativo`, `bravo`.
 
-- Vem da ferramenta `definir_emocao(emocao)` do LLM. O servidor valida o valor e descarta emoções fora da lista.
-- Pode chegar a qualquer momento entre `stt` e `state "ocioso"`: durante `pensando` (se o LLM escolher a emoção antes de falar) ou no meio de `falando` (se escolher depois do texto, como o prompt atual pede). Pode haver mais de uma por turno; vale a mais recente.
-- A emoção vale até a próxima `emotion` ou até o fim do turno: ao receber `state "ocioso"` o app volta o rosto a `neutro`. Um turno sem `emotion` é exibido como `neutro`.
-- O texto de `tts_start` e o áudio nunca contêm marcações de emoção nem de ferramenta: o servidor remove do texto chamadas `<tool_call>`, marcas como `[feliz]` ou `*sorri*`, emojis e símbolos de markdown antes da síntese.
+- **Uma por turno com resposta, sempre antes do primeiro áudio:** chega depois de `stt` e antes de `state "falando"` e do primeiro `tts_start`. O app pode aplicá-la ao rosto antes de tocar qualquer som.
+- **Origem:** o LLM escolhe a emoção chamando a ferramenta `definir_emocao(emocao)`, numa requisição que corre em paralelo com a geração da fala. O servidor valida o valor contra a lista acima.
+- **Valor padrão:** se o LLM não chamar a ferramenta, devolver um valor fora da lista, falhar ou demorar mais que `PEGASUS_EMOCAO_ESPERA_MS` (padrão 1000 ms) contado a partir da primeira frase pronta, o servidor envia `neutro`. Uma emoção que chegue depois disso é descartada.
+- **Duração:** a emoção vale até o fim do turno; ao receber `state "ocioso"` o app volta o rosto a `neutro`. Turnos sem resposta (`stt` vazio, `error`, `abort` antes do primeiro áudio) não têm `emotion`.
+- **Texto limpo:** o texto de `tts_start` e o áudio nunca contêm marcações de emoção nem de ferramenta. O servidor encerra a fala na primeira imitação de chamada escrita pelo LLM (`<tool_call>`, `definir_emocao(...)`, `{"emocao": ...}`) e remove marcas como `[feliz]` ou `*sorri*`, emojis e símbolos de markdown antes da síntese.
 
 ## Fechamento
 

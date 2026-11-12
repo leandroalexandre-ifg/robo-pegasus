@@ -18,7 +18,11 @@ TAXA = 22_050
 @pytest.fixture
 def pipeline(monkeypatch):
     """Substitui Whisper, LLM e Piper por falsos; devolve o que eles recebem."""
-    estado = {"transcricao": "qual é o seu nome?", "pedacos": ["Olá! ", "Sou o Pegasus."]}
+    estado = {
+        "transcricao": "qual é o seu nome?",
+        "pedacos": ["Olá! ", "Sou o Pegasus."],
+        "emocao": Emocao("feliz"),
+    }
 
     async def preparar_modelos(config):
         return TAXA
@@ -35,6 +39,9 @@ def pipeline(monkeypatch):
                 await asyncio.sleep(30)  # LLM "travado", para testar o abort
             yield p
 
+    async def escolher_emocao(texto, config):
+        return estado["emocao"]
+
     async def sintetizar(texto, config):
         return b"\x01\x00" * int(TAXA * 0.25), TAXA  # 250 ms → 3 blocos de até 100 ms
 
@@ -42,6 +49,7 @@ def pipeline(monkeypatch):
     monkeypatch.setattr(main, "preparar_modelos", preparar_modelos)
     monkeypatch.setattr(stt, "transcrever", transcrever)
     monkeypatch.setattr(llm, "gerar", gerar)
+    monkeypatch.setattr(llm, "escolher_emocao", escolher_emocao)
     monkeypatch.setattr(tts, "sintetizar", sintetizar)
     return estado
 
@@ -104,12 +112,14 @@ def test_turno_completo(cliente, pipeline):
 
     assert pipeline["audio_s"] == pytest.approx(1.0)
     frase = ["tts_start", "audio", "audio", "audio", "tts_end"]
-    assert _tipos(recebidas) == ["pensando", "stt", "falando", *frase, *frase, "ocioso"]
+    esperado = ["pensando", "stt", "emotion", "falando", *frase, *frase, "ocioso"]
+    assert _tipos(recebidas) == esperado
     assert recebidas[1] == {"type": "stt", "text": "qual é o seu nome?"}
-    assert recebidas[3] == {"type": "tts_start", "text": "Olá!", "sample_rate": TAXA}
-    assert recebidas[8]["text"] == "Sou o Pegasus."
+    assert recebidas[2] == {"type": "emotion", "emotion": "feliz"}
+    assert recebidas[4] == {"type": "tts_start", "text": "Olá!", "sample_rate": TAXA}
+    assert recebidas[9]["text"] == "Sou o Pegasus."
     # 5512 amostras (11024 bytes) em blocos de 100 ms (2205 amostras, 4410 bytes)
-    assert [n for _, n in recebidas[4:7]] == [4410, 4410, 2204]
+    assert [n for _, n in recebidas[5:8]] == [4410, 4410, 2204]
 
 
 def test_sem_fala_reconhecida_volta_a_ocioso(cliente, pipeline):
@@ -135,8 +145,9 @@ def test_abort_interrompe_a_resposta(cliente, pipeline):
     with cliente.websocket_connect("/ws") as ws:
         _conectar(ws)
         _falar(ws)
-        recebidas = [ws.receive_json() for _ in range(4)]  # pensando, stt, falando, tts_start
-        assert recebidas[3]["text"] == "Primeira frase."
+        # pensando, stt, emotion, falando, tts_start
+        recebidas = [ws.receive_json() for _ in range(5)]
+        assert recebidas[4]["text"] == "Primeira frase."
         while (q := ws.receive()).get("bytes") is not None:
             pass
         assert json.loads(q["text"]) == {"type": "tts_end"}
@@ -199,14 +210,13 @@ def test_token_valido():
     assert not main.token_valido("a", frozenset())
 
 
-def test_emocao_e_enviada_ao_tablet(cliente, pipeline):
-    pipeline["pedacos"] = ["Que notícia ", "boa! ", Emocao("feliz"), "Parabéns."]
+def test_sem_emocao_do_llm_envia_neutro_antes_do_audio(cliente, pipeline):
+    pipeline["emocao"] = None
     with cliente.websocket_connect("/ws") as ws:
         _conectar(ws)
         _falar(ws)
         recebidas = _receber_ate_ocioso(ws)
-    frase = ["tts_start", "audio", "audio", "audio", "tts_end"]
-    assert _tipos(recebidas) == ["pensando", "stt", "falando", *frase, "emotion", *frase, "ocioso"]
-    assert {"type": "emotion", "emotion": "feliz"} in recebidas
-    textos = [m["text"] for m in recebidas if isinstance(m, dict) and m["type"] == "tts_start"]
-    assert textos == ["Que notícia boa!", "Parabéns."]
+    emocoes = [m for m in recebidas if isinstance(m, dict) and m["type"] == "emotion"]
+    assert emocoes == [{"type": "emotion", "emotion": "neutro"}]
+    primeiro_audio = next(i for i, m in enumerate(recebidas) if isinstance(m, tuple))
+    assert recebidas.index(emocoes[0]) < primeiro_audio

@@ -1,5 +1,7 @@
 """Um turno de conversa: áudio do usuário → blocos de áudio da resposta, em fluxo."""
 
+import asyncio
+import logging
 import time
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
@@ -40,12 +42,35 @@ class Turno:
         return " ".join(self.frases)
 
 
-async def _pedacos_medidos(texto: str, config: Config, turno: Turno) -> AsyncIterator[str | Emocao]:
+NEUTRO = Emocao("neutro")
+log = logging.getLogger("pegasus.turno")
+
+
+async def _pedacos_medidos(texto: str, config: Config, turno: Turno) -> AsyncIterator[str]:
     async for pedaco in llm.gerar(texto, config):
-        if isinstance(pedaco, str):
-            turno.marcar("llm_primeiro_token")
+        turno.marcar("llm_primeiro_token")
         yield pedaco
     turno.marcar("llm_fim")
+
+
+async def _emocao_medida(texto: str, config: Config, turno: Turno) -> Emocao | None:
+    try:
+        emocao = await llm.escolher_emocao(texto, config)
+    except Exception as e:  # sem emoção o turno segue, com neutro
+        log.warning("falha ao escolher a emoção: %s", e)
+        return None
+    turno.marcar("emocao_llm")
+    return emocao
+
+
+async def _aguardar_emocao(pedido: asyncio.Task, config: Config) -> Emocao:
+    """A emoção escolhida pelo LLM, ou neutro se ele não a escolher a tempo."""
+    try:
+        emocao = await asyncio.wait_for(asyncio.shield(pedido), config.emocao_espera_s)
+    except TimeoutError:
+        log.warning("emoção não chegou em %.0f ms; usando neutro", config.emocao_espera_s * 1000)
+        return NEUTRO
+    return emocao or NEUTRO
 
 
 async def transcrever(audio: np.ndarray, config: Config, turno: Turno) -> str:
@@ -55,33 +80,39 @@ async def transcrever(audio: np.ndarray, config: Config, turno: Turno) -> str:
 
 
 async def falar(texto: str, config: Config, turno: Turno) -> AsyncIterator[BlocoAudio | Emocao]:
-    """Gera a resposta ao texto do usuário: um bloco de áudio por frase e as
-    emoções pedidas pelo LLM, assim que chegam."""
-    # Enquanto o Piper sintetiza uma frase, o vLLM continua gerando: os tokens
-    # ficam no buffer da conexão até o laço voltar a ler.
-    async for item in cortar_frases(_pedacos_medidos(texto, config, turno)):
-        if isinstance(item, Emocao):
-            turno.marcar("emocao")
-            turno.emocoes.append(item.nome)
-            yield item
-            continue
-        frase = limpar_para_voz(item)  # a voz nunca lê marcações
-        if not frase:
-            continue
-        turno.marcar("llm_primeira_frase")
-        t = time.perf_counter()
-        pcm, taxa = await tts.sintetizar(frase, config)
-        turno.tts_s += time.perf_counter() - t
-        turno.frases.append(frase)
-        turno.marcar("primeiro_audio")
-        yield BlocoAudio(frase, pcm, taxa)
+    """Gera a resposta ao texto do usuário: a emoção do rosto e, depois dela, um
+    bloco de áudio por frase. A emoção vem sempre antes do primeiro áudio."""
+    # A emoção é pedida em paralelo com a fala e costuma chegar enquanto o Piper
+    # sintetiza a primeira frase.
+    pedido = asyncio.create_task(_emocao_medida(texto, config, turno))
+    try:
+        # Enquanto o Piper sintetiza uma frase, o vLLM continua gerando: os tokens
+        # ficam no buffer da conexão até o laço voltar a ler.
+        async for item in cortar_frases(_pedacos_medidos(texto, config, turno)):
+            frase = limpar_para_voz(item)  # a voz nunca lê marcações
+            if not frase:
+                continue
+            turno.marcar("llm_primeira_frase")
+            t = time.perf_counter()
+            pcm, taxa = await tts.sintetizar(frase, config)
+            turno.tts_s += time.perf_counter() - t
+            if not turno.emocoes:
+                emocao = await _aguardar_emocao(pedido, config)
+                turno.emocoes.append(emocao.nome)
+                turno.marcar("emocao")
+                yield emocao
+            turno.frases.append(frase)
+            turno.marcar("primeiro_audio")
+            yield BlocoAudio(frase, pcm, taxa)
+    finally:
+        pedido.cancel()  # turno interrompido ou emoção atrasada: não espera mais
     turno.marcar("fim")
 
 
 async def conversar(
     audio: np.ndarray, config: Config, turno: Turno
 ) -> AsyncIterator[BlocoAudio | Emocao]:
-    """Transcreve o áudio e devolve a resposta falada, um bloco por frase, e as emoções."""
+    """Transcreve o áudio e devolve a emoção e a resposta falada, um bloco por frase."""
     if await transcrever(audio, config, turno):
         async for bloco in falar(turno.texto_usuario, config, turno):
             yield bloco
