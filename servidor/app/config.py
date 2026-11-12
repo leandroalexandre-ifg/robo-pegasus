@@ -1,7 +1,7 @@
 """Configuração do servidor, lida de variáveis de ambiente."""
 
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 RAIZ_REPOSITORIO = Path(__file__).resolve().parents[2]
@@ -12,7 +12,7 @@ MODELOS = RAIZ_REPOSITORIO / "modelos"
 class Config:
     # LLM (vLLM, API compatível com OpenAI)
     llm_url: str
-    llm_chave: str
+    llm_chave: str = field(repr=False)
     llm_modelo: str | None  # None: usa o primeiro modelo de /v1/models
     llm_max_tokens: int
     llm_temperatura: float
@@ -29,6 +29,11 @@ class Config:
 
     # Piper
     piper_voz: Path
+
+    # Servidor WebSocket
+    api_host: str
+    api_porta: int
+    tokens: frozenset[str] = field(repr=False)  # aceitos no hello; vazio recusa todos
 
 
 def carregar_config(ambiente: dict[str, str] | None = None) -> Config:
@@ -50,4 +55,7 @@ def carregar_config(ambiente: dict[str, str] | None = None) -> Config:
         piper_voz=Path(
             env.get("PEGASUS_PIPER_VOZ", str(MODELOS / "piper" / "pt_BR-faber-medium.onnx"))
         ),
+        api_host=env.get("PEGASUS_HOST", "127.0.0.1"),
+        api_porta=int(env.get("PEGASUS_PORTA_API", "8100")),
+        tokens=frozenset(t.strip() for t in env.get("PEGASUS_TOKENS", "").split(",") if t.strip()),
     )

@@ -30,3 +30,15 @@ def test_sobrescreve_pelo_ambiente():
     assert c.piper_voz == Path("/tmp/voz.onnx")
     assert c.llm_max_tokens == 80
     assert c.whisper_prompt is None
+
+
+def test_servidor_e_tokens():
+    c = carregar_config({"PEGASUS_TOKENS": " abc , def,, "})
+    assert (c.api_host, c.api_porta) == ("127.0.0.1", 8100)
+    assert c.tokens == frozenset({"abc", "def"})
+    assert carregar_config({}).tokens == frozenset()
+
+
+def test_segredos_fora_do_repr():
+    c = carregar_config({"PEGASUS_TOKENS": "segredo-tablet", "PEGASUS_LLM_CHAVE": "segredo-llm"})
+    assert "segredo" not in repr(c)
