@@ -17,9 +17,10 @@ class PintorRosto extends CustomPainter {
   void paint(Canvas canvas, Size size) {
     final a = animador;
     final x = a.expressao;
-    // Escala do rosto: cabe na tela em paisagem e em retrato.
-    final s = min(size.width, size.height * 1.6);
-    final centro = size.center(Offset.zero);
+    // Escala do rosto: deixa margem para a boca aberta e para a legenda,
+    // em paisagem e em retrato. Um pouco acima do centro da tela.
+    final s = min(size.width * 0.8, size.height * 1.3);
+    final centro = size.center(Offset.zero) - Offset(0, 0.03 * s);
 
     // Respiração: sobe e desce bem devagar quando está parado.
     final parado =
@@ -128,7 +129,7 @@ class PintorRosto extends CustomPainter {
     final w = 0.2 * s * x.larguraBoca;
     final abertura = (x.bocaAberta + animador.boca * (1 - x.bocaAberta * 0.5))
         .clamp(0.0, 1.0);
-    final h = abertura * 0.12 * s;
+    final h = abertura * 0.1 * s;
     final curva = x.sorriso * 0.045 * s; // positivo: meio mais baixo
     final r = x.bocaRedonda;
     final k = 0.5 + 0.5 * r; // controles mais abertos deixam a boca redonda
