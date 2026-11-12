@@ -16,8 +16,9 @@ from contextlib import asynccontextmanager
 import numpy as np
 from fastapi import FastAPI, WebSocket
 
-from app.config import Config, carregar_config
-from app.pipeline import stt, tts
+from app import persona
+from app.config import Config, carregar_config, resumo_publico
+from app.pipeline import stt, tts, vad
 from app.sessao import Sessao
 from app.wav import TAXA_ENTRADA
 
@@ -36,6 +37,7 @@ async def preparar_modelos(config: Config) -> int:
     """Carrega e aquece Whisper e Piper; devolve a taxa do áudio de saída."""
     await stt.carregar(config)
     voz = await tts.carregar(config)
+    vad.preparar()
     # A primeira execução compila os kernels do CTranslate2; melhor aqui que no 1º turno.
     await stt.transcrever(np.zeros(TAXA_ENTRADA, dtype=np.float32), config)
     await tts.sintetizar("Olá.", config)
@@ -50,6 +52,9 @@ async def lifespan(app: FastAPI):
     config = carregar_config()
     if not config.tokens:
         log.warning("PEGASUS_TOKENS vazio: todas as conexões serão recusadas.")
+    log.info("configuração: %s", json.dumps(resumo_publico(config), ensure_ascii=False))
+    p = persona.carregar(config.persona_arquivo)
+    log.info("persona: %s (%d frases no máximo)", p.nome, p.frases_max)
     app.state.config = config
     app.state.taxa_saida = await preparar_modelos(config)
     log.info("modelos prontos; áudio de saída a %d Hz", app.state.taxa_saida)
@@ -130,7 +135,7 @@ async def conexao(ws: WebSocket) -> None:
         await _atender(ws, sessao)
     finally:
         with contextlib.suppress(Exception):
-            await sessao.cancelar_turno()
+            await sessao.encerrar()
         log.info("sessão %s: desconectada", sessao.id)
 
 
@@ -144,7 +149,7 @@ async def _atender(ws: WebSocket, sessao: Sessao) -> None:
         if quadro["type"] == "websocket.disconnect":
             return
         if quadro.get("bytes") is not None:
-            sessao.ao_audio(quadro["bytes"])
+            await sessao.ao_audio(quadro["bytes"])
             continue
         try:
             mensagem = json.loads(quadro["text"])

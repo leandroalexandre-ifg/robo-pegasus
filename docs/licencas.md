@@ -8,6 +8,7 @@ Modelos, vozes e bibliotecas usados pelo Robô Pegasus. Confira a licença antes
 | --- | --- | --- | --- |
 | Whisper large-v3-turbo | [openai/whisper-large-v3-turbo](https://huggingface.co/openai/whisper-large-v3-turbo) | MIT | Pesos originais da OpenAI. |
 | Whisper large-v3-turbo (CTranslate2) | [mobiuslabsgmbh/faster-whisper-large-v3-turbo](https://huggingface.co/mobiuslabsgmbh/faster-whisper-large-v3-turbo) | MIT | Conversão usada pelo faster-whisper, em `modelos/hub`. |
+| Silero VAD v6 (ONNX) | [snakers4/silero-vad](https://github.com/snakers4/silero-vad) | MIT | Arquivo `silero_vad_v6.onnx` que vem dentro do pacote faster-whisper (`faster_whisper/assets/`); usado em fluxo, na CPU, pelo onnxruntime. |
 | Qwen3.8 27B | [Qwen/Qwen3.8-27B](https://huggingface.co/Qwen/Qwen3.8-27B) | Apache-2.0 | Modelo base. |
 | Qwen3.8 27B AWQ INT4 | [cyankiwi/Qwen3.8-27B-AWQ-INT4](https://huggingface.co/cyankiwi/Qwen3.8-27B-AWQ-INT4) | Apache-2.0 | Quantização servida pelo vLLM. |
 
