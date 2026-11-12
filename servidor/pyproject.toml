@@ -1,0 +1,33 @@
+[project]
+name = "pegasus-servidor"
+version = "0.1.0"
+description = "Servidor de IA do Robô Pegasus: fala → texto → resposta → voz"
+requires-python = ">=3.12"
+# Instalado no .venv da raiz do repositório:
+#   ~/.local/bin/uv pip install --python .venv <pacotes>
+# O vLLM e o torch já estão no mesmo venv (Fase 0).
+dependencies = [
+    "faster-whisper==1.2.1",
+    # O ctranslate2 4.9.0 carrega libcublas.so.12; o venv só tem o cuBLAS 13.
+    "nvidia-cublas-cu12==12.9.3.13",
+    "piper-tts==1.8.0",
+    "openai>=1.0",
+    "numpy>=2",
+]
+
+[dependency-groups]
+dev = [
+    "pytest==9.2.0",
+    "ruff==0.17.4",
+]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["testes"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
