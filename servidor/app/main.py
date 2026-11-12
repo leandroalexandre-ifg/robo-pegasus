@@ -54,6 +54,8 @@ async def lifespan(app: FastAPI):
     # O faster-whisper registra a duração de cada áudio; na escuta contínua isso
     # deixaria rastro das falas descartadas.
     logging.getLogger("faster_whisper").setLevel(logging.WARNING)
+    # O httpx registra cada verificação de saúde do vLLM (uma a cada 5 s).
+    logging.getLogger("httpx").setLevel(logging.WARNING)
     config = carregar_config()
     arquivo_turnos = registro.configurar(config.log_pasta, config.log_dias)
     if not config.tokens:
