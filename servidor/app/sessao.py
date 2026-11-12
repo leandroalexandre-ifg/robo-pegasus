@@ -6,6 +6,7 @@ import contextlib
 import json
 import logging
 import secrets
+import time
 
 import numpy as np
 import openai
@@ -22,6 +23,9 @@ log = logging.getLogger("pegasus.sessao")
 MAX_AUDIO_S = 30
 _MAX_BYTES = MAX_AUDIO_S * TAXA_ENTRADA * 2
 BLOCO_SAIDA_S = 0.1
+# Quanto o abort espera a limpeza do turno cancelado (fechar o fluxo do LLM etc.)
+# antes de seguir sem ela.
+ESPERA_CANCELAMENTO_S = 0.5
 # Margens mantidas em volta da fala detectada, para o Whisper não perder sílabas.
 PRE_FALA_S = 0.3
 POS_FALA_S = 0.2
@@ -115,12 +119,17 @@ class Sessao:
         await self.mudar_estado("ocioso")
 
     async def cancelar_turno(self) -> None:
-        if self._turno is not None and not self._turno.done():
-            self._turno.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await self._turno
-            log.info("sessão %s: turno interrompido", self.id)
-        self._turno = None
+        """Interrompe na hora o turno em andamento: STT, LLM (o fluxo é fechado e o
+        vLLM aborta a geração), pedido de emoção, Piper e envio de áudio."""
+        tarefa, self._turno = self._turno, None
+        if tarefa is not None and not tarefa.done():
+            inicio = time.perf_counter()
+            tarefa.cancel()
+            _, pendentes = await asyncio.wait({tarefa}, timeout=ESPERA_CANCELAMENTO_S)
+            ms = (time.perf_counter() - inicio) * 1000
+            if pendentes:
+                log.warning("sessão %s: limpeza do turno passou de %.0f ms", self.id, ms)
+            log.info("sessão %s: turno interrompido em %.0f ms", self.id, ms)
         if self._frase_aberta:
             self._frase_aberta = False
             await self.enviar_json({"type": "tts_end"})
