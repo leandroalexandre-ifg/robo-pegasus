@@ -28,6 +28,8 @@ BLOCO_SAIDA_S = 0.1
 # Quanto o abort espera a limpeza do turno cancelado (fechar o fluxo do LLM etc.)
 # antes de seguir sem ela.
 ESPERA_CANCELAMENTO_S = 0.5
+# Um tablet que não lê o que o servidor envia (rede travada) não segura o turno.
+ENVIO_LIMITE_S = 10
 # Margens mantidas em volta da fala detectada, para o Whisper não perder sílabas.
 PRE_FALA_S = 0.3
 POS_FALA_S = 0.2
@@ -64,13 +66,21 @@ class Sessao:
         # O receptor de mensagens e a tarefa do turno enviam pela mesma conexão.
         self._envio = asyncio.Lock()
 
-    async def enviar_json(self, mensagem: dict) -> None:
+    async def _enviar(self, envio) -> None:
         async with self._envio:
-            await self.ws.send_text(json.dumps(mensagem, ensure_ascii=False))
+            try:
+                await asyncio.wait_for(envio, ENVIO_LIMITE_S)
+            except TimeoutError:
+                log.warning("sessão %s: envio travado por %d s; fechando", self.id, ENVIO_LIMITE_S)
+                with contextlib.suppress(Exception):
+                    await asyncio.wait_for(self.ws.close(4008, "envio travado"), 1)
+                raise
+
+    async def enviar_json(self, mensagem: dict) -> None:
+        await self._enviar(self.ws.send_text(json.dumps(mensagem, ensure_ascii=False)))
 
     async def enviar_audio(self, pcm: bytes) -> None:
-        async with self._envio:
-            await self.ws.send_bytes(pcm)
+        await self._enviar(self.ws.send_bytes(pcm))
 
     async def mudar_estado(self, estado: str) -> None:
         self.estado = estado
@@ -183,7 +193,9 @@ class Sessao:
         if epoca != self._epoca:
             return
         try:
-            texto = await stt.transcrever(_amostras(pcm), self.config)
+            texto = await asyncio.wait_for(
+                stt.transcrever(_amostras(pcm), self.config), self.config.stt_limite_s
+            )
         except Exception as e:
             log.error(
                 "sessão %s: falha ao transcrever na escuta contínua (%s)", self.id, type(e).__name__
@@ -207,7 +219,9 @@ class Sessao:
     async def _saudar(self, turno: Turno, duracao_s: float) -> None:
         """Só a palavra de ativação: responde "Oi?" e abre a escuta da pergunta."""
         try:
-            pcm, taxa = await tts.sintetizar(SAUDACAO, self.config)
+            pcm, taxa = await asyncio.wait_for(
+                tts.sintetizar(SAUDACAO, self.config), self.config.tts_limite_s
+            )
             await self.mudar_estado("falando")
             await self._enviar_frase(SAUDACAO, pcm, taxa)
             turno.marcar("primeiro_envio")
@@ -254,11 +268,12 @@ class Sessao:
         turno.memoria = len(memoria)
         duracao_s = len(pcm) / 2 / TAXA_ENTRADA
         try:
-            if texto is None:
-                texto = await transcrever(_amostras(pcm), self.config, turno)
-            await self.enviar_json({"type": "stt", "text": texto})
-            if texto:
-                await self._falar(texto, turno, memoria)
+            async with asyncio.timeout(self.config.turno_limite_s):
+                if texto is None:
+                    texto = await transcrever(_amostras(pcm), self.config, turno)
+                await self.enviar_json({"type": "stt", "text": texto})
+                if texto:
+                    await self._falar(texto, turno, memoria)
             await self.mudar_estado("ocioso")
         except asyncio.CancelledError:
             self._lembrar(turno)
@@ -268,6 +283,10 @@ class Sessao:
             log.error("sessão %s: falha no LLM (%s)", self.id, type(e).__name__)
             self._registrar_falha(turno, duracao_s, e)
             await self._falhar("O servidor de linguagem não está disponível.")
+        except TimeoutError as e:
+            log.error("sessão %s: tempo esgotado depois da etapa %s", self.id, turno.etapa)
+            self._registrar_falha(turno, duracao_s, e)
+            await self._falhar("O servidor demorou demais para responder.")
         except Exception as e:
             log.exception("sessão %s: falha no turno", self.id)
             self._registrar_falha(turno, duracao_s, e)

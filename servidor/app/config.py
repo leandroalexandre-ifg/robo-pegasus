@@ -43,6 +43,12 @@ class Config:
     vad_silencio_s: float  # silêncio que encerra a fala
     vad_sem_fala_s: float  # escuta sem nenhuma fala que volta a ocioso
 
+    # Limites de tempo de cada etapa. A etapa que passa do limite encerra o turno com erro.
+    stt_limite_s: float  # transcrição de uma fala
+    llm_limite_s: float  # espera por cada pedaço do fluxo do LLM (inclui o primeiro)
+    tts_limite_s: float  # síntese de uma frase
+    turno_limite_s: float  # turno inteiro, do fim da fala ao último áudio
+
     # Registro dos turnos (só tempos e contagens), em arquivo rotacionado diariamente
     log_pasta: Path
     log_dias: int  # arquivos antigos guardados
@@ -100,6 +106,10 @@ def carregar_config(ambiente: dict[str, str] | None = None) -> Config:
         vad_limiar=float(env.get("PEGASUS_VAD_LIMIAR", "0.5")),
         vad_silencio_s=int(env.get("PEGASUS_VAD_SILENCIO_MS", "600")) / 1000,
         vad_sem_fala_s=int(env.get("PEGASUS_VAD_SEM_FALA_MS", "8000")) / 1000,
+        stt_limite_s=int(env.get("PEGASUS_STT_LIMITE_MS", "5000")) / 1000,
+        llm_limite_s=int(env.get("PEGASUS_LLM_LIMITE_MS", "10000")) / 1000,
+        tts_limite_s=int(env.get("PEGASUS_TTS_LIMITE_MS", "5000")) / 1000,
+        turno_limite_s=int(env.get("PEGASUS_TURNO_LIMITE_MS", "60000")) / 1000,
         log_pasta=Path(env.get("PEGASUS_LOG_PASTA", str(_PASTA_ESTADO / "robo-pegasus"))),
         log_dias=int(env.get("PEGASUS_LOG_DIAS", "30")),
         ativacao=_modo_ativacao(env.get("PEGASUS_ATIVACAO", "toque")),

@@ -224,6 +224,17 @@ Fim do áudio da frase. Pode vir outra frase (`tts_start`) ou `state "ocioso"`.
 
 Falha no turno (por exemplo, LLM desligado). A mensagem é em português e pode ser exibida ou falada. O servidor volta a `ocioso` em seguida; a conexão continua aberta.
 
+Cada etapa tem um limite de tempo; a que passar dele encerra o turno com `error` "O servidor demorou demais para responder.":
+
+| Etapa | Variável | Padrão |
+| --- | --- | --- |
+| Transcrição de uma fala (Whisper) | `PEGASUS_STT_LIMITE_MS` | 5 s |
+| Cada pedaço do fluxo do LLM, inclusive o primeiro | `PEGASUS_LLM_LIMITE_MS` | 10 s |
+| Síntese de uma frase (Piper) | `PEGASUS_TTS_LIMITE_MS` | 5 s |
+| Turno inteiro, do fim da fala ao último áudio | `PEGASUS_TURNO_LIMITE_MS` | 60 s |
+
+O que já foi falado fica na memória da sessão. Um envio ao tablet travado por 10 s fecha a conexão com o código 4008.
+
 ### `emotion`
 
 ```json

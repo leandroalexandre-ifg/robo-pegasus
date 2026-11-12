@@ -87,7 +87,9 @@ async def _aguardar_emocao(pedido: asyncio.Task, config: Config) -> Emocao:
 
 
 async def transcrever(audio: np.ndarray, config: Config, turno: Turno) -> str:
-    turno.texto_usuario = await stt.transcrever(audio, config)
+    turno.texto_usuario = await asyncio.wait_for(
+        stt.transcrever(audio, config), config.stt_limite_s
+    )
     turno.marcar("stt")
     return turno.texto_usuario
 
@@ -124,7 +126,7 @@ async def falar(
                 continue
             turno.marcar("llm_primeira_frase")
             t = time.perf_counter()
-            pcm, taxa = await tts.sintetizar(frase, config)
+            pcm, taxa = await asyncio.wait_for(tts.sintetizar(frase, config), config.tts_limite_s)
             turno.tts_s += time.perf_counter() - t
             if not turno.emocoes:
                 if pedido is not None:

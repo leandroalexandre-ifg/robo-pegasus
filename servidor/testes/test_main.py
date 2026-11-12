@@ -559,3 +559,36 @@ def test_ativacao_registra_o_oi(escuta_continua, pipeline):
     [r] = _registros(pipeline)
     assert r["tipo"] == "ativacao"
     assert r["audio_s"] == pytest.approx(1.5)
+
+
+@pytest.mark.parametrize(
+    ("variavel", "modulo", "funcao"),
+    [("PEGASUS_STT_LIMITE_MS", stt, "transcrever"), ("PEGASUS_TTS_LIMITE_MS", tts, "sintetizar")],
+)
+def test_etapa_lenta_encerra_o_turno_com_erro(monkeypatch, pipeline, variavel, modulo, funcao):
+    async def lento(*args, **kwargs):
+        await asyncio.sleep(30)
+
+    monkeypatch.setenv(variavel, "100")
+    monkeypatch.setattr(modulo, funcao, lento)
+    with TestClient(main.app) as c, c.websocket_connect("/ws") as ws:
+        _conectar(ws)
+        _falar(ws)
+        recebidas = _receber_ate_ocioso(ws)
+    erros = [m for m in recebidas if isinstance(m, dict) and m["type"] == "error"]
+    assert erros == [{"type": "error", "message": "O servidor demorou demais para responder."}]
+    [r] = _registros(pipeline)
+    assert (r["tipo"], r["erro"]) == ("falha", "TimeoutError")
+
+
+def test_limite_do_turno_inteiro(monkeypatch, pipeline):
+    pipeline["pedacos"] = ["Primeira frase. ", None]  # o LLM trava depois da primeira frase
+    monkeypatch.setenv("PEGASUS_TURNO_LIMITE_MS", "300")
+    with TestClient(main.app) as c, c.websocket_connect("/ws") as ws:
+        _conectar(ws)
+        _falar(ws)
+        recebidas = _receber_ate_ocioso(ws)
+    tipos = _tipos(recebidas)
+    assert tipos[-3:] == ["tts_end", "error", "ocioso"]
+    [r] = _registros(pipeline)
+    assert r["etapa"] == "primeiro_envio"

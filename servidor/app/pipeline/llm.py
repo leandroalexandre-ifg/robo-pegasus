@@ -5,6 +5,7 @@ import re
 from collections.abc import AsyncIterator, Sequence
 from contextlib import aclosing
 
+import httpx
 from openai import AsyncOpenAI
 
 from app import persona
@@ -19,12 +20,21 @@ _modelo: str | None = None
 # Sem modo de raciocínio (<think>), por latência.
 _SEM_RACIOCINIO = {"chat_template_kwargs": {"enable_thinking": False}}
 _TEM_TEXTO = re.compile(r"\w")
+LIMITE_CONEXAO_S = 2.0
 
 
 async def _preparar(config: Config) -> tuple[AsyncOpenAI, str]:
     global _cliente, _modelo
     if _cliente is None:
-        _cliente = AsyncOpenAI(base_url=config.llm_url, api_key=config.llm_chave)
+        _cliente = AsyncOpenAI(
+            base_url=config.llm_url,
+            api_key=config.llm_chave,
+            # read vale para cada pedaço do fluxo, inclusive o primeiro token.
+            timeout=httpx.Timeout(config.llm_limite_s, connect=LIMITE_CONEXAO_S),
+            # Sem novas tentativas: com o vLLM fora, o turno falha na hora e o
+            # monitor de saúde avisa os tablets.
+            max_retries=0,
+        )
     if _modelo is None:
         _modelo = config.llm_modelo or (await _cliente.models.list()).data[0].id
     return _cliente, _modelo

@@ -196,3 +196,13 @@ def test_escolher_emocao_tambem_ve_o_historico(cliente):
         "Parabéns!",
         "De novo!",
     ]
+
+
+def test_cliente_sem_novas_tentativas_e_com_limite(monkeypatch):
+    monkeypatch.setattr(llm, "_cliente", None)
+    monkeypatch.setattr(llm, "_modelo", None)
+    config = carregar_config({"PEGASUS_MODELO": "m", "PEGASUS_LLM_LIMITE_MS": "7000"})
+    cliente, _ = asyncio.run(llm._preparar(config))
+    assert cliente.max_retries == 0
+    assert cliente.timeout.read == 7.0
+    assert cliente.timeout.connect == llm.LIMITE_CONEXAO_S
