@@ -50,3 +50,8 @@ def test_reticencias_aspas_e_quebra_de_linha():
 
 def test_ignora_pedacos_sem_texto():
     assert _cortar(["  ", "... ", "\n"]) == []
+
+
+def test_itens_que_nao_sao_texto_passam_na_hora():
+    evento = object()
+    assert _cortar(["Olá, tudo ", evento, "bem? Sim."]) == [evento, "Olá, tudo bem?", "Sim."]
