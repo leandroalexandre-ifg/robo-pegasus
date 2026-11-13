@@ -105,3 +105,8 @@ def test_para_voz(texto, falado):
 def test_sem_numeros_o_texto_fica(texto):
     # Algarismos romanos o espeak já lê ("Leão catorze").
     assert para_voz(texto) == texto
+
+
+def test_pegasus_com_a_tonica_na_primeira_silaba():
+    assert para_voz("Eu sou o Pegasus.") == "Eu sou o Pégasus."
+    assert para_voz("PEGASUS") == "Pégasus"

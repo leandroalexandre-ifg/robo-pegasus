@@ -267,8 +267,14 @@ _SUBSTITUICOES: list[tuple[re.Pattern, Callable[[re.Match], str]]] = [
 ]
 
 
+# O espeak lê "Pegasus" como oxítona (/pega'zus/), com o "pega" átono; o acento põe
+# a tônica na primeira sílaba, como se diz em português.
+_PEGASUS = re.compile(r"\bPegasus\b", re.IGNORECASE)
+
+
 def para_voz(texto: str) -> str:
     """O texto como deve ser falado."""
+    texto = _PEGASUS.sub("Pégasus", texto)
     for padrao, troca in _SUBSTITUICOES:
         texto = padrao.sub(troca, texto)
     return texto
