@@ -21,7 +21,7 @@ def cliente() -> httpx.AsyncClient:
             timeout=_LIMITE_PADRAO,
             follow_redirects=False,  # os destinos são fixos; um redirecionamento é recusado
             transport=_transporte,
-            limits=httpx.Limits(max_connections=16, keepalive_expiry=60),
+            limits=httpx.Limits(max_connections=16, keepalive_expiry=300),
         )
     return _cliente
 

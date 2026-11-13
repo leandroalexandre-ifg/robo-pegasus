@@ -206,3 +206,144 @@ def test_cliente_sem_novas_tentativas_e_com_limite(monkeypatch):
     assert cliente.max_retries == 0
     assert cliente.timeout.read == 7.0
     assert cliente.timeout.connect == llm.LIMITE_CONEXAO_S
+
+
+# Ferramentas de rede
+
+
+def _gerar_com(ferramentas="clima,wikipedia,busca_web", modo="paralelo"):
+    config = carregar_config({"PEGASUS_EMOCAO_MODO": modo, "PEGASUS_FERRAMENTAS": ferramentas})
+
+    async def coletar():
+        return [x async for x in llm.gerar("Quem foi Santos Dumont?", config)]
+
+    return asyncio.run(coletar())
+
+
+@pytest.fixture
+def consultas(monkeypatch):
+    from app import ferramentas
+
+    feitas, respostas = [], []
+
+    async def executar(chamadas, config):
+        feitas.append(chamadas)
+        return respostas.pop(0)
+
+    monkeypatch.setattr(ferramentas, "executar", executar)
+    return feitas, respostas
+
+
+def _consulta(nome="wikipedia", ok=True, fonte="a Wikipédia", texto="Verbete X: dados."):
+    from app.ferramentas import Consulta
+
+    return Consulta(nome, ok, texto, fonte if ok else None, 300)
+
+
+def test_ferramentas_oferecidas_e_prompt(cliente):
+    respostas, pedidos = cliente
+    respostas.append(_Fluxo([_texto("Oi!")]))
+    assert _gerar_com() == ["Oi!"]
+    nomes = [t["function"]["name"] for t in pedidos[0]["tools"]]
+    assert nomes == ["clima", "wikipedia", "busca_web"]
+    assert "ferramentas" in pedidos[0]["messages"][0]["content"]
+
+
+def test_so_data_hora_nao_oferece_ferramentas(cliente):
+    respostas, pedidos = cliente
+    respostas.append(_Fluxo([_texto("Oi!")]))
+    _gerar_com("data_hora")
+    assert "tools" not in pedidos[0]
+
+
+def test_chamada_de_rede_espera_consulta_e_cita_a_fonte(cliente, consultas):
+    from app.ferramentas import Consulta, Espera
+
+    respostas, pedidos = cliente
+    feitas, resultados = consultas
+    resultados.append([_consulta()])
+    respostas.append(_Fluxo([_chamada("wikipedia", '{"assunto": "Santos Dumont"}', id_="w1")]))
+    respostas.append(_Fluxo([_texto(" ele foi"), _texto(" um inventor.")]))
+    itens = _gerar_com()
+    assert itens[0] == Espera("wikipedia")
+    assert isinstance(itens[1], Consulta)
+    assert itens[2:] == ["Segundo a Wikipédia,", " ele foi", " um inventor."]
+    assert feitas == [[("wikipedia", '{"assunto": "Santos Dumont"}')]]
+    segunda = pedidos[1]
+    assert "tools" not in segunda
+    assert segunda["extra_body"]["continue_final_message"] is True
+    assert segunda["extra_body"]["add_generation_prompt"] is False
+    assert segunda["messages"][-1] == {"role": "assistant", "content": "Segundo a Wikipédia,"}
+    assert segunda["messages"][-2]["role"] == "tool"
+    assert segunda["messages"][-2]["tool_call_id"] == "w1"
+
+
+def test_citacao_ganha_espaco_quando_a_continuacao_nao_tem(cliente, consultas):
+    respostas, _ = cliente
+    consultas[1].append([_consulta()])
+    respostas.append(_Fluxo([_chamada("wikipedia", '{"assunto": "x"}')]))
+    respostas.append(_Fluxo([_texto("ele foi.")]))
+    textos = [x for x in _gerar_com() if isinstance(x, str)]
+    assert "".join(textos) == "Segundo a Wikipédia, ele foi."
+
+
+def test_continuacao_vazia_repete_sem_citacao(cliente, consultas):
+    respostas, pedidos = cliente
+    consultas[1].append([_consulta()])
+    respostas.append(_Fluxo([_chamada("wikipedia", '{"assunto": "x"}')]))
+    respostas.append(_Fluxo([]))
+    respostas.append(_Fluxo([_texto("Ele foi um inventor.")]))
+    textos = [x for x in _gerar_com() if isinstance(x, str)]
+    assert textos == ["Ele foi um inventor."]
+    assert "continue_final_message" not in pedidos[2]["extra_body"]
+    assert pedidos[2]["messages"][-1]["role"] == "tool"
+
+
+def test_falha_na_consulta_nao_cita(cliente, consultas):
+    respostas, pedidos = cliente
+    consultas[1].append([_consulta(ok=False, texto='{"erro": "consulta indisponível agora"}')])
+    respostas.append(_Fluxo([_chamada("clima", "{}")]))
+    respostas.append(_Fluxo([_texto("Não consegui ver o tempo agora.")]))
+    textos = [x for x in _gerar_com() if isinstance(x, str)]
+    assert textos == ["Não consegui ver o tempo agora."]
+    assert "continue_final_message" not in pedidos[1]["extra_body"]
+
+
+def test_ferramenta_desligada_nao_e_executada(cliente, consultas):
+    respostas, pedidos = cliente
+    respostas.append(_Fluxo([_chamada("busca_web", '{"consulta": "x"}')]))
+    respostas.append(_Fluxo([_texto("Não consigo buscar isso.")]))
+    itens = _gerar_com("clima")
+    assert itens == ["Não consigo buscar isso."]  # sem Espera nem Consulta
+    assert consultas[0] == []
+    assert pedidos[1]["messages"][-1]["content"] == '{"erro": "ferramenta indisponível"}'
+    assert "tools" not in pedidos[1]
+
+
+def test_modo_antes_emocao_e_consulta_na_mesma_rodada(cliente, consultas):
+    from app.ferramentas import Espera
+
+    respostas, pedidos = cliente
+    consultas[1].append([_consulta("clima", fonte="o Open-Meteo")])
+    chamadas = [
+        NS(index=0, id="e", function=NS(name="definir_emocao", arguments='{"emocao": "feliz"}')),
+        NS(index=1, id="c", function=NS(name="clima", arguments="{}")),
+    ]
+    respostas.append(_Fluxo([NS(choices=[NS(delta=NS(content=None, tool_calls=chamadas))])]))
+    respostas.append(_Fluxo([_texto(" faz sol.")]))
+    itens = _gerar_com(modo="antes")
+    assert Espera("clima") in itens and Emocao("feliz") in itens
+    assert [x for x in itens if isinstance(x, str)] == ["Segundo o Open-Meteo,", " faz sol."]
+    ferramentas = [m for m in pedidos[1]["messages"] if m["role"] == "tool"]
+    assert [m["content"] for m in ferramentas] == ["ok", "Verbete X: dados."]
+
+
+def test_texto_antes_da_chamada_de_rede_dispensa_a_consulta(cliente, consultas):
+    from app.ferramentas import Espera
+
+    respostas, pedidos = cliente
+    respostas.append(_Fluxo([_texto("Foi a Argentina."), _chamada("busca_web", "{}")]))
+    itens = _gerar_com()
+    assert [x for x in itens if isinstance(x, str)] == ["Foi a Argentina."]
+    assert Espera("busca_web") in itens  # o turno não toca a espera depois de falar
+    assert consultas[0] == [] and len(pedidos) == 1

@@ -172,3 +172,39 @@ def test_antes_emocao_depois_do_primeiro_audio_e_descartada(monkeypatch):
     assert [i for i in itens if isinstance(i, Emocao)] == [Emocao("neutro")]
     assert itens[0] == Emocao("neutro")
     assert t.emocoes == ["neutro"]
+
+
+def test_espera_sai_antes_da_resposta_e_fica_fora_da_memoria(monkeypatch):
+    from app.ferramentas import Consulta, Espera
+
+    consulta = Consulta("wikipedia", True, "x", "a Wikipédia", 250)
+    pedacos = [Espera("wikipedia"), consulta, "Segundo a Wikipédia, ", "ele voou."]
+    sintetizadas, _ = _falsos(monkeypatch, "Quem foi Santos Dumont?", pedacos)
+    t = turno.Turno()
+    itens = _rodar(t, PEGASUS_FERRAMENTAS="wikipedia")
+    frases = _frases(itens)
+    assert frases[0] in turno.FRASES_ESPERA
+    assert frases[1:] == ["Segundo a Wikipédia,", "ele voou."]
+    assert t.frases == ["Segundo a Wikipédia,", "ele voou."]  # sem o "Deixa eu ver…"
+    assert t.consultas == [consulta]
+    assert t.tempos["ferramenta_chamada"] <= t.tempos["primeiro_audio"]
+    assert t.tempos["primeiro_audio"] <= t.tempos["resposta_primeiro_audio"]
+
+
+def test_espera_depois_de_falar_nao_toca(monkeypatch):
+    from app.ferramentas import Espera
+
+    _falsos(monkeypatch, "oi", ["Vou ver. ", Espera("clima"), "Faz sol."])
+    itens = _rodar(turno.Turno(), PEGASUS_FERRAMENTAS="clima")
+    assert not set(_frases(itens)) & set(turno.FRASES_ESPERA)
+
+
+def test_so_espera_sem_resposta_conta_como_sem_fala(monkeypatch):
+    from app.ferramentas import Espera
+
+    _falsos(monkeypatch, "oi", [Espera("clima")])
+    t = turno.Turno()
+    itens = _rodar(t, PEGASUS_FERRAMENTAS="clima")
+    # A espera tocou, mas sem resposta o turno repete e cai na fala de reserva.
+    assert _frases(itens)[-1] == turno.FALA_RESERVA
+    assert t.reserva

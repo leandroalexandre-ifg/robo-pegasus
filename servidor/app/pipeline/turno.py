@@ -3,6 +3,7 @@
 import asyncio
 import contextlib
 import logging
+import random
 import time
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
@@ -10,6 +11,7 @@ from dataclasses import dataclass, field
 import numpy as np
 
 from app.config import Config
+from app.ferramentas import Consulta, Espera
 from app.pipeline import llm, stt, tts
 from app.pipeline.emocao import Emocao, limpar_para_voz
 from app.pipeline.frases import cortar_frases
@@ -21,6 +23,7 @@ class BlocoAudio:
     frase: str
     pcm: bytes  # PCM 16 bits mono
     taxa: int
+    espera: bool = False  # "Deixa eu ver…": não entra na memória nem conta como resposta
 
 
 @dataclass
@@ -38,6 +41,7 @@ class Turno:
     memoria: int = 0  # turnos anteriores enviados ao LLM
     reserva: bool = False  # o LLM não respondeu e o robô disse a fala de reserva
     despedida: bool = False  # a fala encerrou a conversa e o robô se despediu
+    consultas: list[Consulta] = field(default_factory=list)  # ferramentas de rede usadas
     _inicio: float = field(default_factory=time.perf_counter, repr=False)
 
     def marcar(self, etapa: str) -> None:
@@ -57,14 +61,40 @@ class Turno:
 NEUTRO = Emocao("neutro")
 REPETICOES_SEM_FALA = 1
 FALA_RESERVA = "Desculpe, me perdi. Pode perguntar de novo?"
+# Ditas enquanto uma ferramenta de rede consulta a internet. Sintetizadas uma vez só.
+FRASES_ESPERA = ("Deixa eu ver…", "Só um instante…", "Vou dar uma olhada…")
+_esperas: dict[str, tuple[bytes, int]] = {}
 log = logging.getLogger("pegasus.turno")
+
+
+async def frase_de_espera(config: Config) -> BlocoAudio:
+    """Uma das FRASES_ESPERA, já sintetizada (na subida ou no primeiro uso)."""
+    frase = random.choice(FRASES_ESPERA)
+    if frase not in _esperas:
+        _esperas[frase] = await asyncio.wait_for(tts.sintetizar(frase, config), config.tts_limite_s)
+    pcm, taxa = _esperas[frase]
+    return BlocoAudio(frase, pcm, taxa, espera=True)
+
+
+async def preparar_esperas(config: Config) -> None:
+    for frase in FRASES_ESPERA:
+        _esperas[frase] = await tts.sintetizar(frase, config)
 
 
 async def _pedacos_medidos(
     texto: str, config: Config, turno: Turno, historico: Historico
 ) -> AsyncIterator[str | Emocao]:
     async for pedaco in llm.gerar(texto, config, historico):
-        turno.marcar("emocao_llm" if isinstance(pedaco, Emocao) else "llm_primeiro_token")
+        if isinstance(pedaco, Consulta):
+            turno.consultas.append(pedaco)
+            turno.marcar("ferramenta_fim")
+            continue
+        if isinstance(pedaco, Espera):
+            turno.marcar("ferramenta_chamada")
+        elif isinstance(pedaco, Emocao):
+            turno.marcar("emocao_llm")
+        else:
+            turno.marcar("llm_primeiro_token")
         yield pedaco
     turno.marcar("llm_fim")
 
@@ -118,6 +148,7 @@ async def _produzir(
 
     emocao_vista = config.emocao_modo == "paralelo"  # no paralelo, a emoção vem à parte
     falou = False
+    esperou = False
 
     async def por(bloco: BlocoAudio) -> None:
         nonlocal emocao_vista, falou
@@ -125,8 +156,10 @@ async def _produzir(
             log.info("o LLM não chamou definir_emocao antes da fala; usando neutro")
             emocao_vista = True
             await fila.put(NEUTRO)
-        falou = True
         turno.marcar("primeiro_audio")  # o primeiro áudio pronto; o envio é medido na sessão
+        if not bloco.espera:
+            falou = True
+            turno.marcar("resposta_primeiro_audio")
         await fila.put(bloco)
 
     try:
@@ -142,6 +175,12 @@ async def _produzir(
                 contexto = ()
             pedacos = _pedacos_medidos(texto, config, turno, contexto)
             async for item in cortar_frases(pedacos, primeira_na_virgula=True):
+                if isinstance(item, Espera):
+                    # Só antes de qualquer fala e uma vez por turno.
+                    if not (falou or esperou):
+                        esperou = True
+                        await por(await frase_de_espera(config))
+                    continue
                 if isinstance(item, Emocao):
                     emocao_vista = True
                     await fila.put(item)
@@ -204,7 +243,8 @@ async def falar(
                 else:
                     yield _registrar_emocao(item, turno)
             else:
-                turno.frases.append(item.frase)  # só o que saiu daqui entra na memória
+                if not item.espera:
+                    turno.frases.append(item.frase)  # só o que saiu daqui entra na memória
                 if prazo is None:
                     prazo = time.perf_counter() + config.emocao_espera_s
                 yield item

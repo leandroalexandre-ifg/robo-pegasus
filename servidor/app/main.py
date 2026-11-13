@@ -18,9 +18,10 @@ from contextlib import asynccontextmanager
 import numpy as np
 from fastapi import FastAPI, HTTPException, Request, WebSocket
 
-from app import persona, registro, saude, seguranca
+from app import ferramentas, persona, registro, saude, seguranca
 from app.config import Config, carregar_config, resumo_publico
-from app.pipeline import stt, tts, vad
+from app.ferramentas import rede
+from app.pipeline import stt, tts, turno, vad
 from app.sessao import Sessao
 from app.wav import TAXA_ENTRADA
 
@@ -46,6 +47,8 @@ async def preparar_modelos(config: Config) -> int:
     # A primeira execução compila os kernels do CTranslate2; melhor aqui que no 1º turno.
     await stt.transcrever(np.zeros(TAXA_ENTRADA, dtype=np.float32), config)
     await tts.sintetizar("Olá.", config)
+    if ferramentas.ativas_de_rede(config):
+        await turno.preparar_esperas(config)  # "Deixa eu ver…" sai sem esperar o Piper
     return voz.config.sample_rate
 
 
@@ -81,6 +84,9 @@ async def lifespan(app: FastAPI):
     async def avisar(disponivel: bool) -> None:
         await asyncio.gather(*(s.ao_llm(disponivel) for s in list(sessoes)), return_exceptions=True)
 
+    # Em segundo plano: a API sobe mesmo sem internet.
+    aquecimento = asyncio.create_task(ferramentas.preaquecer(config))
+
     monitor = saude.MonitorLLM(saude.verificador_http(config), avisar)
     app.state.monitor = monitor
     await monitor.iniciar()
@@ -90,6 +96,8 @@ async def lifespan(app: FastAPI):
         yield
     finally:
         await monitor.parar()
+        aquecimento.cancel()
+        await rede.fechar()
 
 
 app = FastAPI(title="Robô Pegasus", lifespan=lifespan)

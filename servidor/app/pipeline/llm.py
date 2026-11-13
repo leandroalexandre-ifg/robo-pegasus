@@ -8,8 +8,10 @@ from contextlib import aclosing
 import httpx
 from openai import AsyncOpenAI
 
+from app import ferramentas as ferramentas_rede
 from app import persona
 from app.config import Config
+from app.ferramentas import Consulta, Espera
 from app.ferramentas.agora import agora
 from app.pipeline.emocao import FERRAMENTA, Emocao, cortar_marcacoes, emocao_da_chamada
 
@@ -22,6 +24,7 @@ _modelo: str | None = None
 _SEM_RACIOCINIO = {"chat_template_kwargs": {"enable_thinking": False}}
 _TEM_TEXTO = re.compile(r"\w")
 LIMITE_CONEXAO_S = 2.0
+_INDISPONIVEL = '{"erro": "ferramenta indisponível"}'
 
 
 async def _preparar(config: Config) -> tuple[AsyncOpenAI, str]:
@@ -78,10 +81,17 @@ async def _fluxo(
     mensagens: list[dict],
     config: Config,
     chamadas: dict[int, dict] | None = None,
-) -> AsyncIterator[str]:
-    """Uma requisição em fluxo: devolve o texto e, se `chamadas` for dado, oferece a
-    ferramenta definir_emocao e acumula ali as chamadas que o modelo fizer."""
-    ferramentas = {} if chamadas is None else {"tools": [FERRAMENTA], "tool_choice": "auto"}
+    oferecidas: Sequence[dict] = (),
+    continuar: bool = False,
+) -> AsyncIterator[str | Espera]:
+    """Uma requisição em fluxo: devolve o texto e acumula em `chamadas` as chamadas
+    das ferramentas `oferecidas`. Ao começar uma chamada de ferramenta de rede, devolve
+    Espera (antes dos argumentos). Com `continuar`, a última mensagem (do assistente)
+    é continuada em vez de começar uma resposta nova."""
+    ferramentas = {"tools": list(oferecidas), "tool_choice": "auto"} if oferecidas else {}
+    extra = _SEM_RACIOCINIO
+    if continuar:
+        extra = extra | {"continue_final_message": True, "add_generation_prompt": False}
     fluxo = await cliente.chat.completions.create(
         model=modelo,
         messages=mensagens,
@@ -89,8 +99,10 @@ async def _fluxo(
         max_tokens=config.llm_max_tokens,
         temperature=config.llm_temperatura,
         stream=True,
-        extra_body=_SEM_RACIOCINIO,
+        extra_body=extra,
     )
+    de_rede = {f["function"]["name"] for f in oferecidas} & set(ferramentas_rede.DE_REDE)
+    avisadas: set[int] = set()
     # O async with fecha a conexão se o consumidor parar antes do fim.
     async with fluxo:
         async for pedaco in fluxo:
@@ -100,14 +112,19 @@ async def _fluxo(
             if delta.content:
                 yield delta.content
             for tc in getattr(delta, "tool_calls", None) or []:
+                if chamadas is None:
+                    continue
                 chamada = chamadas.setdefault(tc.index, {"id": None, "nome": "", "args": ""})
                 chamada["id"] = tc.id or chamada["id"]
                 if tc.function:
                     chamada["nome"] += tc.function.name or ""
                     chamada["args"] += tc.function.arguments or ""
+                if tc.index not in avisadas and chamada["nome"] in de_rede:
+                    avisadas.add(tc.index)
+                    yield Espera(chamada["nome"])
 
 
-async def _texto_limpo(fluxo: AsyncIterator[str]) -> AsyncIterator[str]:
+async def _texto_limpo[T](fluxo: AsyncIterator[str | T]) -> AsyncIterator[str | T]:
     # Se o modelo imitar uma chamada de ferramenta no texto, a fala termina ali e
     # o aclosing interrompe a geração.
     async with aclosing(fluxo) as pedacos:
@@ -115,8 +132,9 @@ async def _texto_limpo(fluxo: AsyncIterator[str]) -> AsyncIterator[str]:
             yield pedaco
 
 
-def _resultado_das_chamadas(chamadas: dict[int, dict]) -> list[dict]:
-    """Mensagens que devolvem ao modelo as chamadas que ele fez, com resultado "ok"."""
+def _resultado_das_chamadas(chamadas: dict[int, dict], resultados: dict[int, str]) -> list[dict]:
+    """Mensagens que devolvem ao modelo as chamadas que ele fez e os resultados
+    ("ok" para definir_emocao; erro para uma ferramenta que não está ligada)."""
     ids = {i: c["id"] or f"chamada-{i}" for i, c in chamadas.items()}
     assistente = {
         "role": "assistant",
@@ -130,12 +148,22 @@ def _resultado_das_chamadas(chamadas: dict[int, dict]) -> list[dict]:
             for i, c in chamadas.items()
         ],
     }
-    return [assistente] + [{"role": "tool", "tool_call_id": ids[i], "content": "ok"} for i in ids]
+
+    def resultado(i: int) -> str:
+        if i in resultados:
+            return resultados[i]
+        return "ok" if chamadas[i]["nome"] == FERRAMENTA["function"]["name"] else _INDISPONIVEL
+
+    return [assistente] + [
+        {"role": "tool", "tool_call_id": ids[i], "content": resultado(i)} for i in ids
+    ]
 
 
-def _emocoes(chamadas: dict[int, dict]) -> list[Emocao]:
+def _emocoes(chamadas: dict[int, dict], rede: Sequence[str]) -> list[Emocao]:
     emocoes = []
     for c in chamadas.values():
+        if c["nome"] in rede:
+            continue
         if emocao := emocao_da_chamada(c["nome"], c["args"]):
             emocoes.append(emocao)
         else:
@@ -144,44 +172,102 @@ def _emocoes(chamadas: dict[int, dict]) -> list[Emocao]:
     return emocoes
 
 
+async def _depois_das_consultas(
+    cliente: AsyncOpenAI,
+    modelo: str,
+    mensagens: list[dict],
+    config: Config,
+    consultas: list[Consulta],
+) -> AsyncIterator[str]:
+    """Segunda requisição, sem ferramentas, com os resultados. Se alguma fonte deu
+    resultado, a fala começa citando-a ("Segundo a Wikipédia,"): o texto vai na
+    mensagem do assistente e o LLM continua a frase. A citação só sai junto com o
+    primeiro pedaço do LLM; se a continuação vier vazia, repete sem a citação."""
+    if citacao := ferramentas_rede.citacao(consultas):
+        com_citacao = mensagens + [{"role": "assistant", "content": citacao}]
+        citada = False
+        async for pedaco in _texto_limpo(
+            _fluxo(cliente, modelo, com_citacao, config, continuar=True)
+        ):
+            if not citada and _TEM_TEXTO.search(pedaco):
+                citada = True
+                # A continuação às vezes já vem com o espaço; outras, não.
+                yield citacao if pedaco[:1].isspace() else f"{citacao} "
+            if citada:
+                yield pedaco
+        if citada:
+            return
+        log.warning("o LLM não continuou a citação; repetindo sem ela")
+    async for pedaco in _texto_limpo(_fluxo(cliente, modelo, mensagens, config)):
+        yield pedaco
+
+
 async def gerar(
     texto_usuario: str, config: Config, historico: Historico = ()
-) -> AsyncIterator[str | Emocao]:
+) -> AsyncIterator[str | Emocao | Espera | Consulta]:
     """Devolve a fala em pedaços de texto, à medida que o LLM gera.
 
     No modo de emoção "antes", a requisição oferece a ferramenta definir_emocao e o
     prompt pede que ela seja chamada antes da resposta; a Emocao sai no fluxo assim
-    que a chamada termina. No modo "paralelo", o fluxo é só texto, sem ferramentas,
-    e a emoção vem de escolher_emocao. `historico` são os turnos anteriores da sessão."""
+    que a chamada termina. No modo "paralelo", a emoção vem de escolher_emocao.
+
+    Com ferramentas de rede ligadas (PEGASUS_FERRAMENTAS), elas também são oferecidas.
+    Se o LLM chamar uma, sai Espera (o robô pode dizer "Deixa eu ver…"), a consulta é
+    feita, sai a Consulta (para o registro) e a fala vem numa segunda requisição, sem
+    ferramentas: um texto de página não consegue disparar outra chamada.
+    `historico` são os turnos anteriores da sessão."""
     cliente, modelo = await _preparar(config)
-    if config.emocao_modo == "paralelo":
-        async for pedaco in _texto_limpo(
-            _fluxo(
-                cliente,
-                modelo,
-                _mensagens(_fala_atual(texto_usuario, config), _sistema(config), historico),
-                config,
-            )
-        ):
+    rede = ferramentas_rede.ativas_de_rede(config)
+    oferecidas = ferramentas_rede.definicoes(config)
+    sistema = _sistema(config)
+    if config.emocao_modo == "antes":
+        oferecidas = [FERRAMENTA, *oferecidas]
+        sistema += f"\n{persona.PROMPT_EMOCAO}"
+    if rede:
+        sistema += f"\n{ferramentas_rede.PROMPT}"
+    mensagens = _mensagens(_fala_atual(texto_usuario, config), sistema, historico)
+    if not oferecidas:
+        async for pedaco in _texto_limpo(_fluxo(cliente, modelo, mensagens, config)):
             yield pedaco
         return
 
-    sistema = f"{_sistema(config)}\n{persona.PROMPT_EMOCAO}"
-    mensagens = _mensagens(_fala_atual(texto_usuario, config), sistema, historico)
     chamadas: dict[int, dict] = {}
     falou = False
-    async for pedaco in _texto_limpo(_fluxo(cliente, modelo, mensagens, config, chamadas)):
-        falou = falou or bool(_TEM_TEXTO.search(pedaco))
+    async for pedaco in _texto_limpo(
+        _fluxo(cliente, modelo, mensagens, config, chamadas, oferecidas)
+    ):
+        if isinstance(pedaco, str):
+            falou = falou or bool(_TEM_TEXTO.search(pedaco))
         yield pedaco
-    for emocao in _emocoes(chamadas):
+    for emocao in _emocoes(chamadas, rede):
         yield emocao
 
-    if chamadas and not falou:
+    consultar = {i: c for i, c in chamadas.items() if c["nome"] in rede}
+    if consultar and falou:
+        # Respondeu de memória e só depois pediu a consulta: a resposta já foi dita, e
+        # consultar agora faria o robô repetir a mesma coisa citando a fonte.
+        log.info(
+            "o LLM respondeu antes de chamar %s; consulta ignorada",
+            consultar[min(consultar)]["nome"],
+        )
+    elif consultar:
+        consultas = await ferramentas_rede.executar(
+            [(c["nome"], c["args"]) for c in consultar.values()], config
+        )
+        for consulta in consultas:
+            yield consulta
+        resultados = dict(zip(consultar, (c.texto for c in consultas), strict=False))
+        for i in list(consultar)[len(consultas) :]:  # além do máximo por turno
+            resultados[i] = '{"erro": "uma consulta por vez"}'
+        mensagens += _resultado_das_chamadas(chamadas, resultados)
+        async for pedaco in _depois_das_consultas(cliente, modelo, mensagens, config, consultas):
+            yield pedaco
+    elif chamadas and not falou:
         # O Qwen3.8 encerra o turno logo após a chamada: devolve o resultado e pede
         # a fala numa segunda requisição. Ela vai sem a lista de ferramentas, porque
         # com tool_choice "none" o modelo ainda gera a chamada e o vLLM a descarta,
         # devolvendo texto vazio.
-        mensagens += _resultado_das_chamadas(chamadas)
+        mensagens += _resultado_das_chamadas(chamadas, {})
         async for pedaco in _texto_limpo(_fluxo(cliente, modelo, mensagens, config)):
             yield pedaco
 

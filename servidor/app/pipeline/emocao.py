@@ -77,11 +77,14 @@ def _corte_seguro(texto: str) -> int:
     return min(suspeitos, default=len(texto))
 
 
-async def cortar_marcacoes(pedacos: AsyncIterable[str]) -> AsyncIterator[str]:
+async def cortar_marcacoes[T](pedacos: AsyncIterable[str | T]) -> AsyncIterator[str | T]:
     """Repassa o texto até a primeira imitação de chamada de ferramenta e descarta o
     resto. O LLM só escreve a chamada depois da fala, então nada a ser dito se perde."""
     pendente = ""
     async for pedaco in pedacos:
+        if not isinstance(pedaco, str):  # avisos (Espera) passam na hora
+            yield pedaco
+            continue
         pendente += pedaco
         if m := _MARCADOR.search(pendente):
             if pendente[: m.start()]:
