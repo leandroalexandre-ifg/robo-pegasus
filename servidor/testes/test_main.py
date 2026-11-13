@@ -8,9 +8,9 @@ import pytest
 from fastapi.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect
 
-from app import main, saude
+from app import ferramentas, main, saude
 from app import sessao as sessao_mod
-from app.pipeline import llm, stt, tts
+from app.pipeline import llm, stt, tts, turno
 from app.pipeline.emocao import Emocao
 
 TOKEN = "token-de-teste-AbCdEfGhIjKlMnOpQrStUvWxYz0123456789"
@@ -59,7 +59,12 @@ def pipeline(monkeypatch, tmp_path):
     monkeypatch.setattr(saude, "INTERVALO_S", 0.02)
     monkeypatch.setattr(saude, "INTERVALO_FORA_S", 0.02)
     estado["turnos"] = tmp_path / "turnos.jsonl"
+
+    async def sem_internet(config):
+        return None
+
     monkeypatch.setattr(main, "preparar_modelos", preparar_modelos)
+    monkeypatch.setattr(ferramentas, "preaquecer", sem_internet)
     monkeypatch.setattr(stt, "transcrever", transcrever)
     monkeypatch.setattr(llm, "gerar", gerar)
     monkeypatch.setattr(tts, "sintetizar", sintetizar)
@@ -953,7 +958,7 @@ def test_limite_do_turno_inteiro(monkeypatch, pipeline):
     tipos = _tipos(recebidas)
     assert tipos[-3:] == ["tts_end", "error", "ocioso"]
     [r] = _registros(pipeline)
-    assert r["etapa"] == "primeiro_envio"
+    assert r["etapa"] in ("primeiro_envio", "resposta_primeiro_envio")
 
 
 def _esperar_estado(ws, estado):
@@ -1090,3 +1095,23 @@ def test_llm_mudo_sempre_usa_a_fala_de_reserva(cliente, pipeline, monkeypatch):
     falas = [m["text"] for m in recebidas if isinstance(m, dict) and m["type"] == "tts_start"]
     assert falas == [FALA_RESERVA]
     assert chamadas[-1] == []  # a fala de reserva não entra na memória
+
+
+def test_registro_das_ferramentas_sem_texto(monkeypatch, pipeline):
+    from app.ferramentas import Consulta, Espera
+
+    consulta = Consulta("wikipedia", True, "DADOS EXTERNOS segredo do verbete", "a Wikipédia", 321)
+    pipeline["pedacos"] = [Espera("wikipedia"), consulta, "Segundo a Wikipédia, ", "ele voou."]
+    monkeypatch.setenv("PEGASUS_FERRAMENTAS", "wikipedia")
+    with TestClient(main.app) as c, c.websocket_connect("/ws") as ws:
+        _conectar(ws)
+        _falar(ws)
+        recebidas = _receber_ate_ocioso(ws)
+    falas = [m["text"] for m in recebidas if isinstance(m, dict) and m["type"] == "tts_start"]
+    assert falas[0] in turno.FRASES_ESPERA
+    [r] = _registros(pipeline)
+    assert r["ferramentas"] == [
+        {"nome": "wikipedia", "ok": True, "ms": 321, "caracteres": len(consulta.texto)}
+    ]
+    assert r["ms"]["fala_ate_resposta"] >= r["ms"]["fala_ate_primeiro_audio"]
+    assert "segredo" not in json.dumps(r)

@@ -33,7 +33,7 @@ ssh -N -L 0.0.0.0:8000:localhost:8000 USUARIO@SERVIDOR_NUMBERS
 - vLLM 0.33 + torch 2.14 (CUDA 13.0) na **GPU1** (`CUDA_VISIBLE_DEVICES=1`), com `--gpu-memory-utilization 0.85 --max-model-len 8192 --max-num-seqs 8`. Sem o `--max-num-seqs 8`, o perfil de CUDA graphs pede 13 GB extras e dá falta de memória. Usa ~26 GB da GPU1, sobrando ~6 GB.
 - Ferramentas (emoção): o serviço também usa `--enable-auto-tool-choice --tool-call-parser qwen3_coder`, porque o template do Qwen3.8 emite chamadas em XML (`<function=...>`). Sem isso o vLLM recusa requisições com `tools`.
 - A **GPU0** tem processos residentes do SciTech Ear (`scitechear-api` e `scitechear-worker`, ~3,7 GB). Não usar a GPU0 e não mexer nesses processos.
-- Serviços `pegasus-llm.service` (vLLM) e `pegasus-api.service` (API), no systemd --user, sem `[Install]` (não iniciam com o sistema; limite de 3 tentativas em 10 min). Cópias em `servidor/systemd/`. Ligar/desligar os dois juntos: `pegasus-ligar` e `pegasus-desligar` (`servidor/scripts/`, com link em `~/.local/bin`). Estado: `pegasus-status`.
+- Serviços `pegasus-llm.service` (vLLM), `pegasus-api.service` (API) e `pegasus-busca.service` (SearXNG em Docker), no systemd --user, sem `[Install]` (não iniciam com o sistema; limite de 3 tentativas em 10 min). Cópias em `servidor/systemd/`. Ligar/desligar todos juntos: `pegasus-ligar` e `pegasus-desligar` (`servidor/scripts/`, com link em `~/.local/bin`). Estado: `pegasus-status`.
 - O `pegasus.env` define `CUDA_HOME` e `PATH` apontando para o `nvcc` do venv e `VLLM_USE_FLASHINFER_SAMPLER=0`: a compilação JIT do FlashInfer falha (nvcc 13.5 com cabeçalhos 13.0), então o amostrador do FlashInfer fica desligado.
 - O Qwen3 responde com `<think>` por padrão. Para o robô, desligue o modo de raciocínio na chamada (`"chat_template_kwargs": {"enable_thinking": false}`), por latência.
 - Não tocar no SciTech Ear (unidades `scitechear-*`, checkout, Caddy em uso, Ollama, `.env`). Sem sudo.
@@ -107,6 +107,15 @@ Regras do servidor:
 - O LLM é chamado pela API compatível com OpenAI do vLLM; não acople o código a um modelo específico. O nome do modelo vem de configuração.
 - Configuração por variáveis de ambiente (`.env`, nunca commitado). Tokens dos tablets também.
 - Registre o tempo de cada etapa (VAD, STT, primeira frase do LLM, primeira voz) em todo turno de conversa.
+
+## Ferramentas de internet do LLM
+
+- `PEGASUS_FERRAMENTAS=data_hora,clima,wikipedia,busca_web` (vazio desliga). Código em `servidor/app/ferramentas/`.
+- `data_hora` não é ferramenta: a fala atual vai ao LLM com `[agora: …]` na frente (fuso `PEGASUS_FUSO`), sem rodada extra.
+- `clima` (Open-Meteo, cidade padrão `PEGASUS_CIDADE=Goiânia`), `wikipedia` (pt.wikipedia) e `busca_web` (SearXNG local) são oferecidas na requisição da fala. Ao chamar uma, o robô diz "Deixa eu ver…" (já sintetizada), consulta com limite (2 s, 2 s, 3 s; 4 s no total) e responde numa segunda requisição **sem ferramentas**, começando pela fonte ("Segundo a Wikipédia, …", via `continue_final_message`).
+- Nenhuma ferramenta aceita URL do modelo. O texto externo é limpo (`limpeza.py`) e vai entre `DADOS EXTERNOS` e `FIM DOS DADOS EXTERNOS`; não entra na memória nem no registro (só nome, ok, ms e caracteres).
+- SearXNG: `pegasus-busca.service` (Docker, imagem fixada pelo digest, só `127.0.0.1:8104`, sem root, sem GPU, SafeSearch estrito, DuckDuckGo/Brave/Bing/Wikipedia). Segredo em `~/.config/robo-pegasus/searxng.env`. O daemon Docker é compartilhado: só mexa no contêiner `pegasus-searxng`.
+- User-Agent `RoboPegasus/0.1 (+URL do repositório)`, sem e-mail.
 
 ## App (`app/`)
 

@@ -23,6 +23,7 @@ CAMPOS = frozenset(
         "frases",
         "memoria",
         "emocoes",
+        "ferramentas",
         "ms",
         "etapa",
         "erro",

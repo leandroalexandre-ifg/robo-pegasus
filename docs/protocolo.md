@@ -245,6 +245,8 @@ Texto reconhecido. `text` vazio quando nada foi entendido; nesse caso o servidor
 
 Início de uma frase. Os quadros binários seguintes são o áudio dela.
 
+**Frase de espera:** quando o LLM consulta a internet (clima, Wikipédia ou busca), a primeira frase do turno pode ser "Deixa eu ver…", "Só um instante…" ou "Vou dar uma olhada…", enquanto a consulta roda (de 0,3 a 4 s). É uma frase comum (`tts_start`/áudio/`tts_end`); a resposta vem nas frases seguintes, começando pela fonte ("Segundo a Wikipédia, …"). O app não precisa tratá-la de forma diferente. Não muda a versão do protocolo.
+
 ### Áudio (binário)
 
 PCM da frase, em blocos de até 100 ms. A boca do rosto segue o volume (RMS) deste áudio.

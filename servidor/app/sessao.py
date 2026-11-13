@@ -577,7 +577,9 @@ class Sessao:
                 else:
                     if self.estado != "falando":
                         await self.mudar_estado("falando")
-                    await self._enviar_frase(bloco.frase, bloco.pcm, bloco.taxa, turno)
+                    await self._enviar_frase(
+                        bloco.frase, bloco.pcm, bloco.taxa, turno, resposta=not bloco.espera
+                    )
                 bloco = await anext(resposta, None)
         finally:
             if primeiro is not None:
@@ -587,7 +589,14 @@ class Sessao:
                     await primeiro  # recolhe o erro de uma prévia que não chegou a enviar
                 await resposta.aclose()  # fecha o fluxo do LLM e o pedido de emoção
 
-    async def _enviar_frase(self, frase: str, pcm: bytes, taxa: int, turno: Turno | None = None):
+    async def _enviar_frase(
+        self,
+        frase: str,
+        pcm: bytes,
+        taxa: int,
+        turno: Turno | None = None,
+        resposta: bool = True,  # False: frase de espera ("Deixa eu ver…")
+    ):
         passo = int(taxa * BLOCO_SAIDA_S) * 2
         self._frase_aberta = True
         await self.enviar_json({"type": "tts_start", "text": frase, "sample_rate": taxa})
@@ -595,6 +604,8 @@ class Sessao:
             await self.enviar_audio(pcm[i : i + passo])
             if turno is not None:
                 turno.marcar("primeiro_envio")
+                if resposta:
+                    turno.marcar("resposta_primeiro_envio")
         await self.enviar_json({"type": "tts_end"})
         self._frase_aberta = False
 
@@ -615,6 +626,9 @@ class Sessao:
         if "primeiro_envio" in ms:
             # Meta do projeto: do fim da fala ao primeiro som, incluindo a espera do VAD.
             ms["fala_ate_primeiro_audio"] = ms["vad"] + ms["primeiro_envio"]
+        if "resposta_primeiro_envio" in ms:
+            # Com ferramenta, o primeiro áudio é o "Deixa eu ver…"; este é o da resposta.
+            ms["fala_ate_resposta"] = ms["vad"] + ms["resposta_primeiro_envio"]
         return {
             "sessao": self.id,
             "tablet": self.device_id,
@@ -624,6 +638,18 @@ class Sessao:
             "memoria": turno.memoria,
             "emocoes": turno.emocoes,
             "ms": ms,
+        } | self._ferramentas(turno)
+
+    @staticmethod
+    def _ferramentas(turno: Turno) -> dict:
+        """Consultas do turno: nome, se deu certo, tempo e tamanho, nunca o texto."""
+        if not turno.consultas:
+            return {}
+        return {
+            "ferramentas": [
+                {"nome": c.nome, "ok": c.ok, "ms": c.ms, "caracteres": len(c.texto)}
+                for c in turno.consultas
+            ]
         }
 
     def _registrar_falha(self, turno: Turno, duracao_s: float, erro: BaseException) -> None:

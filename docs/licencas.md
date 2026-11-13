@@ -30,6 +30,16 @@ Modelos, vozes e bibliotecas usados pelo Robô Pegasus. Confira a licença antes
 | vLLM | 0.33.0 | Apache-2.0 | |
 | openai (SDK Python) | 3.49.0 | Apache-2.0 | Cliente da API do vLLM. |
 | PyTorch | 2.14.0 | BSD-3-Clause | |
+| httpx | 0.28.1 | BSD-3-Clause | Cliente HTTP das ferramentas; já vinha como dependência do SDK openai. |
+
+## Serviços e dados externos (ferramentas do LLM)
+
+| Item | Origem | Licença / termos | Observações |
+| --- | --- | --- | --- |
+| SearXNG | [searxng/searxng](https://github.com/searxng/searxng), imagem Docker `searxng/searxng:2026.11.9-57ff753ad` (fixada pelo digest em `servidor/systemd/pegasus-busca.service`) | **AGPL-3.0-or-later** | Roda sem modificação, como serviço separado, só em 127.0.0.1; o servidor só faz pedidos HTTP a ele. Se o SearXNG for modificado e oferecido pela rede, o código modificado precisa ser publicado. Configuração em `servidor/searxng/settings.yml`. |
+| Open-Meteo (API de previsão e de geocodificação) | [open-meteo.com](https://open-meteo.com/) | Dados CC BY 4.0; API gratuita para uso não comercial (até 10 mil pedidos/dia) | Sem chave. A atribuição é feita em voz: "Segundo o Open-Meteo, …". Uso comercial exige plano pago. |
+| Wikipédia em português (API MediaWiki) | [pt.wikipedia.org](https://pt.wikipedia.org/w/api.php) | Textos CC BY-SA 4.0 | Atribuição em voz: "Segundo a Wikipédia, …". User-Agent `RoboPegasus/0.1 (+URL do repositório)`, como pede a política da Wikimedia. |
+| Buscadores consultados pelo SearXNG | DuckDuckGo, Brave, Bing, Wikipedia | Termos de cada serviço | Trechos curtos (até 3 resultados) usados só para a resposta falada, sem guardar. Limite de 20 buscas/min para não sobrecarregar. |
 
 ## Bibliotecas do app
 
