@@ -14,6 +14,11 @@ PASTA tem WAVs 16 kHz mono com prefixos que dizem o que se espera de cada um:
   palavra_*.wav      só "Pegasus."           → "Oi?"; em seguida vai um seguinte_*.wav
   seguinte_*.wav     pergunta sem a palavra, dita depois do "Oi?" → resposta
   sem_palavra_*.wav  fala qualquer           → descartada (nenhuma mensagem)
+  despedida_*.wav    "Tchau, Pegasus."       → despedida, dita durante a conversa
+
+Depois de cada resposta, o servidor abre a conversa (PEGASUS_CONVERSA_S). O cliente
+então sorteia: uma pergunta seguinte, sem o nome (seguinte_*.wav), uma despedida ou
+ficar calado até a conversa acabar ("espera", que mede o prazo).
 """
 
 import argparse
@@ -41,8 +46,8 @@ TAXA_SAIDA = 22_050
 @dataclass
 class Evento:
     cliente: int
-    tipo: str  # pergunta, palavra, seguinte, sem_palavra
-    resultado: str  # resposta, oi, descartada, erro, desconectado, inesperado
+    tipo: str  # pergunta, palavra, seguinte, sem_palavra, despedida, espera
+    resultado: str  # resposta, oi, descartada, despedida, fim_conversa, erro, desconectado
     latencia_ms: float | None
     instante: float
 
@@ -78,8 +83,9 @@ class Microfone:
             await asyncio.sleep(max(0.0, t0 + n * QUADRO_S - time.perf_counter()))
 
 
-async def _turno(ws, mic: Microfone, pcm: bytes, tipo: str, cliente: int) -> Evento:
+async def _turno(ws, mic: Microfone, pcm: bytes, tipo: str, cliente: int, conversa: dict) -> Evento:
     fim_da_fala = await mic.falar(pcm)
+    encerrou = False  # conversation "esperando_nome" depois do áudio: despedida
     primeiro_audio = None
     audio_bytes = 0
     oi = False
@@ -98,7 +104,11 @@ async def _turno(ws, mic: Microfone, pcm: bytes, tipo: str, cliente: int) -> Eve
             audio_bytes += len(quadro)
             continue
         m = json.loads(quadro)
-        if m["type"] == "tts_start":
+        if m["type"] == "conversation":
+            conversa["aberta"] = m["state"] == "conversando"
+            conversa["prazo_s"] = m.get("timeout_ms", 0) / 1000
+            encerrou = not conversa["aberta"] and primeiro_audio is not None
+        elif m["type"] == "tts_start":
             mic.mudo = True  # o tablet fecha o microfone para tocar a voz
             oi = oi or m["text"] == "Oi?"
         elif m["type"] == "error":
@@ -107,7 +117,7 @@ async def _turno(ws, mic: Microfone, pcm: bytes, tipo: str, cliente: int) -> Eve
             resultado = "desconectado"
         elif m["type"] == "state" and m["state"] in ("ocioso", "ouvindo"):
             if primeiro_audio is not None:
-                resultado = "oi" if oi else "resposta"
+                resultado = "oi" if oi else "despedida" if encerrou else "resposta"
             elif m["state"] == "ocioso":
                 resultado = "erro"  # turno sem áudio (stt vazio, por exemplo)
     if primeiro_audio is not None:
@@ -117,6 +127,28 @@ async def _turno(ws, mic: Microfone, pcm: bytes, tipo: str, cliente: int) -> Eve
     mic.mudo = False
     latencia = None if primeiro_audio is None else (primeiro_audio - fim_da_fala) * 1000
     return Evento(cliente, tipo, resultado, latencia, time.time())
+
+
+async def _esperar_fim_da_conversa(ws, conversa: dict, cliente: int) -> Evento:
+    """Fica calado (o microfone manda silêncio) até o servidor encerrar a conversa.
+    A "latência" é o tempo até o esperando_nome, que deve ser o prazo."""
+    inicio = time.perf_counter()
+    resultado = "erro"
+    try:
+        while True:
+            quadro = await asyncio.wait_for(ws.recv(), conversa["prazo_s"] + 3)
+            if isinstance(quadro, bytes):
+                break
+            m = json.loads(quadro)
+            if m["type"] == "conversation" and m["state"] == "esperando_nome":
+                conversa["aberta"] = False
+                resultado = "fim_conversa"
+            if m["type"] == "state":
+                break
+    except TimeoutError:
+        pass
+    ms = (time.perf_counter() - inicio) * 1000
+    return Evento(cliente, "espera", resultado, ms, time.time())
 
 
 async def cliente(n: int, url: str, token: str, falas: dict, ate: float, eventos: list) -> None:
@@ -131,14 +163,26 @@ async def cliente(n: int, url: str, token: str, falas: dict, ate: float, eventos
         mic = Microfone(ws)
         envio = asyncio.create_task(mic.rodar())
         await asyncio.sleep(sorteio.uniform(0, 3))  # os clientes não começam juntos
+        conversa = {"aberta": False, "prazo_s": 0.0}
         try:
             while time.time() < ate:
                 tipo = sorteio.choices(["pergunta", "palavra", "sem_palavra"], weights=[6, 2, 2])[0]
-                ev = await _turno(ws, mic, sorteio.choice(falas[tipo]), tipo, n)
-                eventos.append(ev)
-                if tipo == "palavra" and ev.resultado == "oi":
+                eventos.append(
+                    await _turno(ws, mic, sorteio.choice(falas[tipo]), tipo, n, conversa)
+                )
+                if tipo == "palavra" and conversa["aberta"]:  # depois do "Oi?", a pergunta
                     pcm = sorteio.choice(falas["seguinte"])
-                    eventos.append(await _turno(ws, mic, pcm, "seguinte", n))
+                    eventos.append(await _turno(ws, mic, pcm, "seguinte", n, conversa))
+                while conversa["aberta"] and time.time() < ate:
+                    acao = sorteio.choices(["seguinte", "despedida", "espera"], weights=[4, 2, 4])[
+                        0
+                    ]
+                    if acao == "espera":
+                        eventos.append(await _esperar_fim_da_conversa(ws, conversa, n))
+                    else:
+                        await asyncio.sleep(sorteio.uniform(0.5, 2))  # pausa dentro do prazo
+                        pcm = sorteio.choice(falas[acao])
+                        eventos.append(await _turno(ws, mic, pcm, acao, n, conversa))
                 await asyncio.sleep(sorteio.uniform(1, 4))  # pausa entre falas, mic aberto
         finally:
             envio.cancel()
@@ -174,6 +218,8 @@ def resumir(eventos: list[Evento], gpu: list[dict], segundos: float) -> dict:
         "seguinte": "resposta",
         "palavra": "oi",
         "sem_palavra": "descartada",
+        "despedida": "despedida",
+        "espera": "fim_conversa",
     }
     por_tipo = {}
     for tipo in esperado:
@@ -194,6 +240,8 @@ def resumir(eventos: list[Evento], gpu: list[dict], segundos: float) -> dict:
                 "max": round(max(lat)),
                 "acima_de_1500": sum(x > 1500 for x in lat),
             }
+            if tipo == "espera":  # não é latência: é o prazo da conversa
+                del por_tipo[tipo]["latencia_ms"]["acima_de_1500"]
     memoria = [a["memoria_mib"] for a in gpu]
     return {
         "duracao_s": round(segundos),
@@ -209,7 +257,7 @@ def resumir(eventos: list[Evento], gpu: list[dict], segundos: float) -> dict:
 
 def carregar_falas(pasta: Path) -> dict[str, list[bytes]]:
     falas: dict[str, list[bytes]] = {
-        k: [] for k in ("pergunta", "palavra", "seguinte", "sem_palavra")
+        k: [] for k in ("pergunta", "palavra", "seguinte", "sem_palavra", "despedida")
     }
     for wav in sorted(pasta.glob("*.wav")):
         tipo = next(

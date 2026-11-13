@@ -53,3 +53,51 @@ def pergunta(texto: str) -> str | None:
     if m is None or not e_ativacao(m[1]):
         return None
     return m[2].lstrip(_PONTUACAO).rstrip()
+
+
+# Encerramento da conversa: a fala inteira tem de ser uma despedida, para que
+# "tchau, mas antes me diz uma coisa" ainda vire pergunta. Valem, em volta do
+# núcleo, palavras de cortesia ("ok, obrigado, tchau") e o nome ("tchau, Pegasus").
+_DESPEDIDAS = frozenset(
+    {
+        "tchau",
+        "tchau tchau",
+        "ate logo",
+        "ate mais",
+        "ate depois",
+        "ate a proxima",
+        "ate amanha",
+        "e so isso",
+        "era so isso",
+        "so isso",
+        "por hoje e so",
+        "pode parar",
+        "pode descansar",
+        "chega por hoje",
+        "encerrar",
+        "encerrar a conversa",
+        "fim da conversa",
+    }
+)
+# Só agradecer ("obrigado") não encerra: a pessoa pode seguir perguntando.
+_CORTESIA = frozenset(
+    {"ok", "ta", "bom", "entao", "beleza", "certo", "obrigado", "obrigada", "muito", "valeu"}
+)
+_CORTESIA_FINAL = _CORTESIA | {"tchau"}  # "é só isso, tchau"
+_PALAVRAS = re.compile(r"[^\W\d_]+")
+
+
+def encerra(texto: str) -> bool:
+    """A fala inteira é uma despedida ("tchau, Pegasus", "obrigado, é só isso")."""
+    palavras = [_normalizar(p) for p in _PALAVRAS.findall(texto)]
+    palavras = [p for p in palavras if not e_ativacao(p)]
+    while palavras:
+        if " ".join(palavras) in _DESPEDIDAS:
+            return True
+        if palavras[0] in _CORTESIA:
+            palavras = palavras[1:]
+        elif palavras[-1] in _CORTESIA_FINAL:
+            palavras = palavras[:-1]
+        else:
+            return False
+    return False

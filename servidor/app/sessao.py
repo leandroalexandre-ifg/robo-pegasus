@@ -7,7 +7,7 @@ import json
 import logging
 import secrets
 import time
-from collections.abc import Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass
 
 import numpy as np
@@ -18,7 +18,7 @@ from app import registro
 from app.config import Config
 from app.pipeline import ativacao, stt, tts
 from app.pipeline.emocao import Emocao
-from app.pipeline.turno import Turno, falar, transcrever
+from app.pipeline.turno import BlocoAudio, Turno, falar, transcrever
 from app.pipeline.vad import DetectorFala
 from app.saude import MonitorLLM
 from app.wav import TAXA_ENTRADA
@@ -41,6 +41,7 @@ POS_FALA_S = 0.2
 VIGIA_GUARDA_S = 1.0
 _VIGIA_LIMITE_BYTES = round(2 * VIGIA_GUARDA_S * TAXA_ENTRADA) * 2
 SAUDACAO = "Oi?"  # resposta a uma fala que é só a palavra de ativação
+DESPEDIDA = "Tchau! Até a próxima."  # resposta a "tchau, Pegasus" no modo palavra
 # Uma fala da escuta contínua mais longa que isso não é um chamado (ruído ou conversa
 # da sala) e é descartada sem transcrever: o Whisper fica lento e inventa texto com
 # ruído longo.
@@ -112,6 +113,12 @@ class Sessao:
         # são canceladas juntas (abort, listen_start, queda do LLM).
         self._verificacoes: set[asyncio.Task] = set()
         self._frase_aberta = False
+        # Modo palavra: escuta aberta sem precisar do nome (depois do "Oi?" ou de uma
+        # resposta). O prazo sem fala da escuta atual fica em `_sem_fala_s`.
+        self._conversando = False
+        self._sem_fala_s = config.vad_sem_fala_s
+        # Zera a memória depois de PEGASUS_MEMORIA_S sem conversa (do fim do último turno).
+        self._esquecimento: asyncio.TimerHandle | None = None
         # Memória curta: (fala do usuário, resposta) dos últimos turnos desta conexão.
         self.historico: collections.deque[tuple[str, str]] = collections.deque(
             maxlen=config.memoria_turnos
@@ -154,6 +161,9 @@ class Sessao:
             await self.mudar_estado("ocioso")
 
     async def mudar_estado(self, estado: str) -> None:
+        if estado in ("ocioso", "desconectado") and self._conversando:
+            self._conversando = False
+            await self.enviar_json({"type": "conversation", "state": "esperando_nome"})
         self.estado = estado
         await self.enviar_json({"type": "state", "state": estado})
 
@@ -165,10 +175,21 @@ class Sessao:
         self._descartadas = 0
         self._vad = None
 
-    async def _abrir_escuta(self) -> None:
+    async def _abrir_escuta(self, sem_fala_s: float | None = None) -> None:
         self._limpar_audio()
         self._vad = DetectorFala(self.config)
+        self._sem_fala_s = sem_fala_s or self.config.vad_sem_fala_s
         await self.mudar_estado("ouvindo")
+
+    async def _conversar(self, prazo_s: float) -> None:
+        """Modo palavra: abre a escuta sem exigir o nome. A próxima fala é pergunta;
+        sem fala em `prazo_s` (contado no áudio recebido, isto é, depois de a voz do
+        robô tocar), volta a esperar o nome."""
+        self._conversando = True
+        await self.enviar_json(
+            {"type": "conversation", "state": "conversando", "timeout_ms": round(prazo_s * 1000)}
+        )
+        await self._abrir_escuta(prazo_s)
 
     async def ao_listen_start(self) -> None:
         if self.estado_livre() == "desconectado":
@@ -190,10 +211,7 @@ class Sessao:
             await self._encerrar_escuta("vad")
         elif len(self._audio) >= _MAX_BYTES:
             await self._encerrar_escuta("limite")
-        elif (
-            not self._vad.falou
-            and len(self._audio) >= self.config.vad_sem_fala_s * 2 * TAXA_ENTRADA
-        ):
+        elif not self._vad.falou and len(self._audio) >= self._sem_fala_s * 2 * TAXA_ENTRADA:
             log.info("sessão %s: escuta sem fala; voltando a ocioso", self.id)
             self._limpar_audio()
             await self.mudar_estado(self.estado_livre())
@@ -377,7 +395,7 @@ class Sessao:
             await self.mudar_estado("falando")
             await self._enviar_frase(SAUDACAO, pcm, taxa)
             turno.marcar("primeiro_envio")
-            await self._abrir_escuta()
+            await self._conversar(self.config.vad_sem_fala_s)
         except asyncio.CancelledError:
             raise
         except Exception:
@@ -409,11 +427,31 @@ class Sessao:
         try:
             await self.cancelar_turno()
         finally:
+            self._cancelar_esquecimento()
             self.historico.clear()
+
+    def esquecer(self, motivo: str) -> None:
+        """Zera a memória da conversa (outra pessoa pode chegar depois)."""
+        self._cancelar_esquecimento()
+        if self.historico:
+            self.historico.clear()
+            log.info("sessão %s: memória zerada (%s)", self.id, motivo)
+
+    def _cancelar_esquecimento(self) -> None:
+        if self._esquecimento is not None:
+            self._esquecimento.cancel()
+            self._esquecimento = None
+
+    def _agendar_esquecimento(self) -> None:
+        self._cancelar_esquecimento()
+        if self.config.memoria_s > 0 and self.historico:
+            self._esquecimento = asyncio.get_running_loop().call_later(
+                self.config.memoria_s, self.esquecer, "tempo sem conversa"
+            )
 
     def _lembrar(self, turno: Turno) -> None:
         # Guarda o que o robô chegou a dizer, mesmo se o turno foi interrompido.
-        if turno.texto_usuario and turno.frases and not turno.reserva:
+        if turno.texto_usuario and turno.frases and not (turno.reserva or turno.despedida):
             self.historico.append((turno.texto_usuario, turno.resposta))
 
     async def _responder(
@@ -426,6 +464,7 @@ class Sessao:
         """Responde à fala. Com `texto`, ela já foi transcrita (palavra de ativação).
         Com `portao`, o turno começou antes do fim da fala: transcreve e gera, mas só
         envia algo (inclusive erros) depois de passar por ele."""
+        self._cancelar_esquecimento()  # o prazo recomeça no fim deste turno
         memoria = tuple(self.historico)
         turno.memoria = len(memoria)
         duracao_s = len(pcm) / 2 / TAXA_ENTRADA
@@ -433,10 +472,13 @@ class Sessao:
             async with asyncio.timeout(self.config.turno_limite_s):
                 if texto is None:
                     texto = await transcrever(_amostras(pcm), self.config, turno)
+                    # Na conversa, "Pegasus, e amanhã?" vale como "e amanhã?".
+                    if self.config.ativacao == "palavra" and (resto := ativacao.pergunta(texto)):
+                        texto = turno.texto_usuario = resto
                 await self._falar(texto, turno, memoria, portao)
             if not await _passou(portao):
                 return
-            await self.mudar_estado(self.estado_livre())
+            await self._depois_da_resposta(turno)
         except asyncio.CancelledError:
             if portao is not None and not portao.aberto:
                 raise  # prévia cancelada: a pessoa voltou a falar; não houve turno
@@ -448,8 +490,35 @@ class Sessao:
                 await self._tratar_falha(turno, duracao_s, e)
         else:
             self._lembrar(turno)
-            tipo = "turno" if turno.frases else "sem_fala"
+            tipo = "despedida" if turno.despedida else "turno" if turno.frases else "sem_fala"
             registro.registrar(tipo, **self._medidas(turno, duracao_s))
+        finally:
+            self._agendar_esquecimento()
+
+    async def _depois_da_resposta(self, turno: Turno) -> None:
+        """No modo palavra, cada resposta abre (ou renova) a conversa; uma despedida
+        ou uma fala sem resposta volta a esperar o nome."""
+        if (
+            self.config.ativacao == "palavra"
+            and self.config.conversa_s > 0
+            and turno.frases
+            and not turno.despedida
+            and self.estado_livre() == "ocioso"
+        ):
+            await self._conversar(self.config.conversa_s)
+        else:
+            await self.mudar_estado(self.estado_livre())
+
+    async def _despedir(self, turno: Turno) -> AsyncIterator[BlocoAudio]:
+        """Resposta fixa a uma despedida, sem o LLM e sem emoção."""
+        turno.despedida = True
+        self.esquecer("despedida")
+        pcm, taxa = await asyncio.wait_for(
+            tts.sintetizar(DESPEDIDA, self.config), self.config.tts_limite_s
+        )
+        turno.marcar("primeiro_audio")
+        turno.frases.append(DESPEDIDA)
+        yield BlocoAudio(DESPEDIDA, pcm, taxa)
 
     async def _tratar_falha(self, turno: Turno, duracao_s: float, e: Exception) -> None:
         if isinstance(e, openai.APIError):
@@ -479,7 +548,12 @@ class Sessao:
     ) -> None:
         """Envia o `stt` e a resposta. A geração começa já, antes do portão: o primeiro
         bloco (áudio ou emoção) fica pronto enquanto o VAD ainda confirma o fim da fala."""
-        resposta = falar(texto, self.config, turno, memoria) if texto else None
+        resposta = None
+        if texto and self.config.ativacao == "palavra" and ativacao.encerra(texto):
+            log.info("sessão %s: despedida; volta a esperar o nome", self.id)
+            resposta = self._despedir(turno)
+        elif texto:
+            resposta = falar(texto, self.config, turno, memoria)
         primeiro = asyncio.ensure_future(anext(resposta, None)) if resposta else None
         try:
             if not await _passou(portao):

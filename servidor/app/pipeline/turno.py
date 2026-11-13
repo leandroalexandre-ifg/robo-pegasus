@@ -37,6 +37,7 @@ class Turno:
     vad_s: float = 0.0  # silêncio esperado depois da fala até decidir que ela acabou
     memoria: int = 0  # turnos anteriores enviados ao LLM
     reserva: bool = False  # o LLM não respondeu e o robô disse a fala de reserva
+    despedida: bool = False  # a fala encerrou a conversa e o robô se despediu
     _inicio: float = field(default_factory=time.perf_counter, repr=False)
 
     def marcar(self, etapa: str) -> None:

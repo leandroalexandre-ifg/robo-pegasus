@@ -14,7 +14,7 @@ Este documento é a fonte da verdade do protocolo. Ao mudar o protocolo, atualiz
 
 ## Sessão e memória
 
-Cada conexão é uma sessão. O servidor guarda uma memória curta da conversa da sessão: os últimos `PEGASUS_MEMORIA_TURNOS` turnos (padrão 6), cada um com a fala do usuário e o que o robô respondeu, e os envia ao LLM a cada turno. Uma resposta interrompida entra na memória só com as frases que chegaram a ser sintetizadas; um turno sem resposta (sem fala reconhecida, erro, `abort` antes da primeira frase) não entra.
+Cada conexão é uma sessão. O servidor guarda uma memória curta da conversa da sessão: os últimos `PEGASUS_MEMORIA_TURNOS` turnos (padrão 6), cada um com a fala do usuário e o que o robô respondeu, e os envia ao LLM a cada turno. Uma resposta interrompida entra na memória só com as frases que chegaram a ser sintetizadas; um turno sem resposta (sem fala reconhecida, erro, `abort` antes da primeira frase) não entra. A memória é zerada quando a conexão cai, numa despedida do modo `palavra` (ver "Conversa") e depois de `PEGASUS_MEMORIA_S` (padrão 180 s; 0 desliga) sem conversa, contados do fim do último turno: quem chegar depois começa do zero.
 
 A memória fica só na memória do processo e é descartada quando a conexão fecha. Ao reconectar, o tablet começa uma conversa nova.
 
@@ -68,9 +68,21 @@ O tablet envia áudio o tempo todo, exceto enquanto toca a voz do robô: ele fec
 No estado `ocioso`, o servidor separa as falas com o VAD (o mesmo fim de fala de `PEGASUS_VAD_SILENCIO_MS`), transcreve cada uma com o Whisper e olha a primeira palavra:
 
 - **"Pegasus" seguido de mais texto** ("Pegasus, qual é o seu nome?"): o resto da frase é a pergunta. O servidor envia `state "pensando"` e segue um turno normal, com `stt` trazendo só a pergunta, sem a palavra.
-- **Só "Pegasus":** o servidor responde "Oi?" (`state "falando"`, uma frase `tts_start`/áudio/`tts_end`, sem `emotion`) e abre a escuta (`state "ouvindo"`). A fala seguinte é a pergunta, sem precisar repetir a palavra. Sem fala em `PEGASUS_VAD_SEM_FALA_MS`, volta a `ocioso`.
+- **Só "Pegasus":** o servidor responde "Oi?" (`state "falando"`, uma frase `tts_start`/áudio/`tts_end`, sem `emotion`) e abre a conversa (`conversation "conversando"` e `state "ouvindo"`). A fala seguinte é a pergunta, sem precisar repetir a palavra. Sem fala em `PEGASUS_VAD_SEM_FALA_MS`, volta a esperar o nome.
 - **Qualquer outra fala:** é descartada na hora. O servidor não envia nada ao tablet, não registra nada no log e não guarda o áudio nem o texto. A fala também não entra na memória da sessão.
 - **Fala com mais de 10 s:** é descartada sem transcrever, do mesmo jeito. Um chamado é curto; uma fala longa é conversa ou ruído da sala, que deixa o Whisper lento. A fala que continua depois do corte conta como fala nova.
+
+### Conversa
+
+Depois de cada resposta (e do "Oi?"), o servidor não volta a esperar o nome: ele envia `conversation "conversando"` e `state "ouvindo"`, e a próxima fala vira pergunta sem precisar de "Pegasus" (se a fala começar com o nome, ele é tirado da pergunta, como no estado `ocioso`). A memória da sessão segue valendo, então a pergunta pode depender da anterior ("e quantos anos você tem?").
+
+- **Prazo:** `PEGASUS_CONVERSA_S` (padrão 8 s; 0 desliga a conversa) sem fala, contado no áudio que chega do tablet, isto é, a partir do momento em que ele termina de tocar a resposta e reabre o microfone. Depois do "Oi?", o prazo é `PEGASUS_VAD_SEM_FALA_MS`.
+- **Renovação:** cada nova resposta envia outro `conversation "conversando"` e recomeça o prazo.
+- **Fim por silêncio:** sem fala no prazo, o servidor envia `conversation "esperando_nome"` e `state "ocioso"`; daí em diante, só "Pegasus" abre a escuta de novo.
+- **Despedida:** se a fala inteira for uma despedida ("tchau, Pegasus", "obrigado, é só isso", "até logo", "pode descansar"), o servidor não chama o LLM: envia `stt`, responde "Tchau! Até a próxima." (`state "falando"`, uma frase, sem `emotion`) e termina com `conversation "esperando_nome"` e `state "ocioso"`. Palavras de cortesia e o nome em volta não mudam isso ("ok, obrigado, tchau"). Já "Obrigado." sozinho ou "Tchau, mas antes me diz uma coisa" são perguntas normais. A despedida zera a memória da sessão. "Pegasus, tchau" vindo de `ocioso` também é despedida.
+- **Outros fins:** `abort`, `error`, a queda do LLM (`state "desconectado"`) ou uma fala sem texto reconhecido (`stt` vazio) também encerram a conversa, com `conversation "esperando_nome"` antes do `state`.
+
+No modo `toque` não há conversa: a mensagem `conversation` nunca é enviada, e "tchau" vai ao LLM como qualquer pergunta.
 
 Valem as variações próximas que o Whisper produz: acentos e maiúsculas são ignorados ("Pégasus", "PEGASUS"), e grafias como "Pégaso", "Pegasos" ou "Pegassus" também valem. A palavra precisa abrir a frase, podendo vir só depois de um chamamento ("Ei, Pegasus", "Oi, Pegasus"): "Qual é o seu nome, Pegasus?" é descartada.
 
@@ -85,10 +97,22 @@ Tablet                                   Servidor
   │ ◄───────────── tts_start {"Oi?"} ───── │
   │ ◄══════════════════ áudio do "Oi?" ═══ │   o tablet fecha o microfone e toca
   │ ◄──────────────────────── tts_end ──── │
+  │ ◄──── conversation "conversando" ───── │
   │ ◄───────────────── state "ouvindo" ─── │
   │ ══ áudio PCM (depois de tocar) ═════►  │   "que horas são?"
   │ ◄──────────────── state "pensando" ─── │
-  │                ...                     │   turno normal, depois state "ocioso"
+  │                ...                     │   turno normal
+  │ ◄──── conversation "conversando" ───── │   prazo renovado
+  │ ◄───────────────── state "ouvindo" ─── │
+  │ ══ áudio PCM ═══════════════════════►  │   "e amanhã?" (sem "Pegasus")
+  │                ...                     │   turno normal, prazo renovado
+  │ ══ áudio PCM ═══════════════════════►  │   "tchau, Pegasus"
+  │ ◄────────────────────── stt {text} ─── │
+  │ ◄───────────────── state "falando" ─── │
+  │ ◄─── tts_start {"Tchau! Até..."} ───── │   despedida fixa, sem LLM
+  │ ◄──────────────────────── tts_end ──── │
+  │ ◄─── conversation "esperando_nome" ─── │
+  │ ◄───────────────── state "ocioso" ──── │   só "Pegasus" abre a escuta de novo
 ```
 
 Enquanto uma fala está sendo verificada, um `listen_start` ou um `abort` a descarta. Áudio recebido em `pensando` ou `falando` é ignorado.
@@ -186,6 +210,15 @@ A cada 15 s. `t` é opcional e volta igual no `pong`. Sem nenhuma mensagem do ta
 Estados: `ocioso`, `ouvindo`, `pensando`, `falando`, `desconectado`.
 
 `desconectado` vindo do servidor quer dizer que a conexão está de pé, mas o servidor de linguagem (vLLM) está fora do ar. O app também mostra `desconectado` quando a própria conexão cai. Ver "Servidor de linguagem fora do ar".
+
+### `conversation`
+
+```json
+{"type": "conversation", "state": "conversando", "timeout_ms": 8000}
+{"type": "conversation", "state": "esperando_nome"}
+```
+
+Só no modo `palavra` (ver "Conversa"). `conversando`: a escuta está aberta sem precisar do nome; `timeout_ms` é o prazo sem fala, contado depois que o tablet termina de tocar a resposta. `esperando_nome`: a conversa acabou e só "Pegasus" abre a escuta. Vem sempre logo antes do `state` correspondente (`ouvindo`; `ocioso` ou `desconectado`). Ao conectar, o tablet está em `esperando_nome`, sem mensagem. O app pode usar isso no rosto, por exemplo para mostrar que o robô ainda espera a continuação da conversa.
 
 ### `stt`
 

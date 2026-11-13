@@ -20,6 +20,7 @@ class Config:
     llm_temperatura: float
     emocao_modo: str  # "antes": a fala chama a ferramenta; "paralelo": requisição própria
     memoria_turnos: int  # turnos anteriores da sessão enviados ao LLM
+    memoria_s: float  # a memória é zerada depois disso sem conversa; 0: só ao desconectar
     emocao_espera_s: float  # prazo da emoção depois do primeiro áudio (paralelo); depois, neutro
 
     # Whisper (faster-whisper)
@@ -43,6 +44,7 @@ class Config:
     vad_silencio_s: float  # silêncio que encerra a fala
     vad_previa_s: float  # silêncio com que o turno já começa, sem enviar nada; 0 desliga
     vad_sem_fala_s: float  # escuta sem nenhuma fala que volta a ocioso
+    conversa_s: float  # modo palavra: escuta aberta depois de cada resposta; 0 desliga
 
     # Limites de tempo de cada etapa. A etapa que passa do limite encerra o turno com erro.
     stt_limite_s: float  # transcrição de uma fala
@@ -90,6 +92,7 @@ def carregar_config(ambiente: dict[str, str] | None = None) -> Config:
         llm_max_tokens=int(env.get("PEGASUS_LLM_MAX_TOKENS", "150")),
         llm_temperatura=float(env.get("PEGASUS_LLM_TEMPERATURA", "0.7")),
         memoria_turnos=int(env.get("PEGASUS_MEMORIA_TURNOS", "6")),
+        memoria_s=float(env.get("PEGASUS_MEMORIA_S", "180")),
         emocao_modo=_modo_emocao(env.get("PEGASUS_EMOCAO_MODO", "antes")),
         emocao_espera_s=int(env.get("PEGASUS_EMOCAO_ESPERA_MS", "1000")) / 1000,
         whisper_modelo=env.get("PEGASUS_WHISPER_MODELO", "large-v3-turbo"),
@@ -108,6 +111,7 @@ def carregar_config(ambiente: dict[str, str] | None = None) -> Config:
         vad_silencio_s=int(env.get("PEGASUS_VAD_SILENCIO_MS", "600")) / 1000,
         vad_previa_s=int(env.get("PEGASUS_VAD_PREVIA_MS", "300")) / 1000,
         vad_sem_fala_s=int(env.get("PEGASUS_VAD_SEM_FALA_MS", "8000")) / 1000,
+        conversa_s=float(env.get("PEGASUS_CONVERSA_S", "8")),
         stt_limite_s=int(env.get("PEGASUS_STT_LIMITE_MS", "5000")) / 1000,
         llm_limite_s=int(env.get("PEGASUS_LLM_LIMITE_MS", "10000")) / 1000,
         tts_limite_s=int(env.get("PEGASUS_TTS_LIMITE_MS", "5000")) / 1000,
@@ -128,6 +132,7 @@ def resumo_publico(config: Config) -> dict[str, object]:
         whisper = f"cuda (GPU{config.whisper_gpu})"
     resumo: dict[str, object] = {
         "ativacao": config.ativacao,
+        "conversa_s": config.conversa_s,
         "emocao_modo": config.emocao_modo,
         "llm_modelo": config.llm_modelo or "(primeiro de /v1/models)",
         "api": f"{config.api_host}:{config.api_porta}",
@@ -136,6 +141,7 @@ def resumo_publico(config: Config) -> dict[str, object]:
         "vad_silencio_ms": round(config.vad_silencio_s * 1000),
         "vad_previa_ms": round(config.vad_previa_s * 1000),
         "memoria_turnos": config.memoria_turnos,
+        "memoria_s": config.memoria_s,
         "log_turnos": f"{config.log_pasta} ({config.log_dias} dias)",
         "whisper": f"{config.whisper_modelo}, {whisper}, {config.whisper_precisao}",
     }

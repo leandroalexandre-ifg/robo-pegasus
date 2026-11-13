@@ -103,6 +103,24 @@ def _receber_ate_ocioso(ws):
             return recebidas
 
 
+def _receber_ate_estado(ws, estado):
+    """Como _receber_ate_ocioso, até o estado pedido."""
+    recebidas = []
+    while True:
+        quadro = ws.receive()
+        if quadro.get("bytes") is not None:
+            recebidas.append(("audio", len(quadro["bytes"])))
+            continue
+        mensagem = json.loads(quadro["text"])
+        recebidas.append(mensagem)
+        if mensagem == {"type": "state", "state": estado}:
+            return recebidas
+
+
+CONVERSANDO = {"type": "conversation", "state": "conversando", "timeout_ms": 8000}
+ESPERANDO_NOME = {"type": "conversation", "state": "esperando_nome"}
+
+
 def _falar(ws, segundos=1.0):
     ws.send_json({"type": "listen_start"})
     assert ws.receive_json() == {"type": "state", "state": "ouvindo"}
@@ -445,9 +463,10 @@ def test_palavra_com_pergunta_responde_sem_listen_start(escuta_continua, pipelin
     with escuta_continua.websocket_connect("/ws") as ws:
         _conectar_continuo(ws)
         _enviar_audio(ws, 3.0)  # uma fala de 0,5 s a 1,5 s; o resto é silêncio
-        recebidas = _receber_ate_ocioso(ws)
+        recebidas = _receber_ate_estado(ws, "ouvindo")
     assert _tipos(recebidas)[:4] == ["pensando", "stt", "emotion", "falando"]
     assert recebidas[1] == {"type": "stt", "text": "qual é o seu nome?"}
+    assert recebidas[-2:] == [CONVERSANDO, {"type": "state", "state": "ouvindo"}]
     assert pipeline["transcritos"] == [pytest.approx(1.5)]  # recortada com as margens
     assert pipeline["historicos"] == [[]]
 
@@ -477,11 +496,12 @@ def test_so_a_palavra_responde_oi_e_abre_a_escuta(escuta_continua, pipeline):
             recebidas.append(("audio", 0) if m.get("bytes") else json.loads(m["text"]))
         assert _tipos(recebidas)[:2] == ["falando", "tts_start"]
         assert recebidas[1]["text"] == "Oi?"
-        assert _tipos(recebidas)[-1] == "tts_end"
+        assert _tipos(recebidas)[-2] == "tts_end"
+        assert recebidas[-1] == CONVERSANDO
         assert "emotion" not in _tipos(recebidas)
         # a pergunta vem sem a palavra, na escuta aberta pelo "Oi?"
         _enviar_audio(ws, 3.0)
-        respostas = _receber_ate_ocioso(ws)
+        respostas = _receber_ate_estado(ws, "ouvindo")
     assert respostas[1] == {"type": "stt", "text": "que horas são?"}
     assert pipeline["historicos"] == [[]]
 
@@ -635,12 +655,115 @@ def test_previa_no_modo_palavra_cancelada_ao_voltar_a_falar(escuta_continua, pip
     with escuta_continua.websocket_connect("/ws") as ws:
         _conectar_continuo(ws)
         _enviar_audio(ws, 3.5)
-        recebidas = _receber_ate_ocioso(ws)
+        recebidas = _receber_ate_estado(ws, "ouvindo")
     assert _tipos(recebidas)[:3] == ["pensando", "stt", "emotion"]
     assert _tipos(recebidas).count("stt") == 1
     assert duracoes[-1] == pytest.approx(2.5)
     [r] = _registros(pipeline)
     assert r["tipo"] == "turno" and "liberado" in r["ms"]
+
+
+def test_conversa_aceita_a_pergunta_seguinte_sem_o_nome(escuta_continua, pipeline):
+    pipeline["falas"] += ["Pegasus, qual é o seu nome?", "e quantos anos você tem?"]
+    with escuta_continua.websocket_connect("/ws") as ws:
+        _conectar_continuo(ws)
+        _enviar_audio(ws, 3.0)
+        assert _receber_ate_estado(ws, "ouvindo")[-2] == CONVERSANDO
+        _enviar_audio(ws, 3.0)  # sem "Pegasus"
+        segunda = _receber_ate_estado(ws, "ouvindo")
+    assert segunda[1] == {"type": "stt", "text": "e quantos anos você tem?"}
+    assert segunda[-2] == CONVERSANDO  # a nova resposta renova o prazo
+    assert len(pipeline["historicos"][1]) == 1  # com a memória do primeiro turno
+
+
+def test_nome_no_comeco_da_fala_da_conversa_sai_da_pergunta(escuta_continua, pipeline):
+    pipeline["falas"] += ["Pegasus, qual é o seu nome?", "Pegasus, e a sua idade?"]
+    with escuta_continua.websocket_connect("/ws") as ws:
+        _conectar_continuo(ws)
+        _enviar_audio(ws, 3.0)
+        _receber_ate_estado(ws, "ouvindo")
+        _enviar_audio(ws, 3.0)
+        segunda = _receber_ate_estado(ws, "ouvindo")
+    assert segunda[1] == {"type": "stt", "text": "e a sua idade?"}
+
+
+def test_conversa_sem_fala_volta_a_esperar_o_nome(escuta_continua, pipeline, monkeypatch):
+    monkeypatch.setenv("PEGASUS_CONVERSA_S", "0.3")  # vence antes da fala falsa (0,5 s)
+    pipeline["falas"] += ["Pegasus, qual é o seu nome?", "conversa da sala"]
+    with TestClient(main.app) as c, c.websocket_connect("/ws") as ws:
+        _conectar_continuo(ws)
+        _enviar_audio(ws, 3.0)
+        recebidas = _receber_ate_estado(ws, "ouvindo")
+        assert recebidas[-2]["timeout_ms"] == 300
+        _enviar_audio(ws, 0.32)
+        assert ws.receive_json() == ESPERANDO_NOME
+        assert ws.receive_json() == {"type": "state", "state": "ocioso"}
+        # de volta à escuta do nome: fala sem a palavra é descartada
+        _enviar_audio(ws, 3.0)
+        _nada_mais_foi_enviado(ws)
+    assert len(pipeline["historicos"]) == 1
+
+
+def test_despedida_encerra_a_conversa_na_hora(escuta_continua, pipeline):
+    pipeline["falas"] += ["Pegasus, qual é o seu nome?", "Obrigado, é só isso."]
+    with escuta_continua.websocket_connect("/ws") as ws:
+        _conectar_continuo(ws)
+        _enviar_audio(ws, 3.0)
+        _receber_ate_estado(ws, "ouvindo")
+        _enviar_audio(ws, 3.0)
+        recebidas = _receber_ate_ocioso(ws)
+    assert recebidas[1] == {"type": "stt", "text": "Obrigado, é só isso."}
+    assert recebidas[3] == {"type": "tts_start", "text": sessao_mod.DESPEDIDA, "sample_rate": TAXA}
+    assert "emotion" not in _tipos(recebidas)
+    assert recebidas[-2:] == [ESPERANDO_NOME, {"type": "state", "state": "ocioso"}]
+    assert len(pipeline["historicos"]) == 1  # a despedida não vai ao LLM
+    assert [r["tipo"] for r in _registros(pipeline)] == ["turno", "despedida"]
+
+
+def test_despedida_logo_depois_do_nome(escuta_continua, pipeline):
+    pipeline["falas"].append("Pegasus, tchau!")
+    with escuta_continua.websocket_connect("/ws") as ws:
+        _conectar_continuo(ws)
+        _enviar_audio(ws, 3.0)
+        recebidas = _receber_ate_ocioso(ws)
+    assert _tipos(recebidas)[:3] == ["pensando", "stt", "falando"]
+    assert recebidas[3]["text"] == sessao_mod.DESPEDIDA
+    assert CONVERSANDO not in recebidas and ESPERANDO_NOME not in recebidas
+    assert "historicos" not in pipeline
+
+
+def test_modo_toque_nao_abre_conversa(cliente, pipeline):
+    pipeline["transcricao"] = "tchau"
+    with cliente.websocket_connect("/ws") as ws:
+        _conectar(ws)
+        _falar(ws)
+        recebidas = _receber_ate_ocioso(ws)
+    assert "conversation" not in _tipos(recebidas)
+    assert len(pipeline["historicos"]) == 1  # no toque, "tchau" vai ao LLM
+
+
+def test_despedida_zera_a_memoria(escuta_continua, pipeline):
+    pipeline["falas"] += ["Pegasus, qual é o seu nome?", "Tchau, Pegasus.", "Pegasus, oi"]
+    with escuta_continua.websocket_connect("/ws") as ws:
+        _conectar_continuo(ws)
+        _enviar_audio(ws, 3.0)
+        _receber_ate_estado(ws, "ouvindo")
+        _enviar_audio(ws, 3.0)
+        _receber_ate_ocioso(ws)  # despedida
+        _enviar_audio(ws, 3.0)
+        _receber_ate_estado(ws, "ouvindo")
+    assert pipeline["historicos"] == [[], []]  # o segundo pedido ao LLM vai sem memória
+
+
+def test_memoria_zerada_depois_do_prazo_sem_conversa(monkeypatch, pipeline):
+    monkeypatch.setenv("PEGASUS_MEMORIA_S", "0.3")
+    with TestClient(main.app) as c, c.websocket_connect("/ws") as ws:
+        _conectar(ws)
+        _turno(ws, "primeira", pipeline)
+        _turno(ws, "segunda", pipeline)  # dentro do prazo: lembra a primeira
+        time.sleep(0.5)
+        _turno(ws, "terceira", pipeline)
+    assert [len(h) for h in pipeline["historicos"]] == [0, 1, 0]
 
 
 def _registros(pipeline):

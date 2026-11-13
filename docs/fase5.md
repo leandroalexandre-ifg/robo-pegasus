@@ -11,6 +11,7 @@ As latências abaixo são as do servidor (`fala_ate_primeiro_audio` no `turnos.j
 | 1 (código inicial) | 126 | **17 (12%)**: o LLM não disse nada | 1346 ms | 1636 ms | 1884 ms | 24 |
 | 2 (repete o pedido) | 140 | 0, mas 10 com a fala de reserva | 1339 ms | 1591 ms | 2015 ms | 22 |
 | 3 (repete sem a memória) | 132 | 0, e nenhuma fala de reserva | 1345 ms | 1548 ms | 1707 ms | 16 (12%) |
+| 4 (propostas 1, 2 e 4 aplicadas; ver abaixo) | 139 | 0, e nenhuma fala de reserva | **817 ms** | 974 ms | 1273 ms | 0 |
 
 Na rodada 3, todas as falas tiveram o resultado esperado:
 
@@ -55,6 +56,33 @@ Em 131 de 132 turnos, o primeiro áudio ficou esperando a emoção: a frase e a 
 
 As propostas 1 e 2 juntas levariam a mediana de ~1,35 s para cerca de 0,8 s.
 
+### Depois dos ajustes (rodada 4, 2026-11-13)
+
+Decisões aplicadas: (1) o primeiro áudio não espera mais a emoção, que vai assim que chega, mesmo no meio da fala (em vez da saída estruturada); (2) prévia: o turno começa com 300 ms de silêncio (`PEGASUS_VAD_PREVIA_MS`) e só envia com os 600 ms completos; (4) a primeira frase termina na primeira vírgula; e falas da escuta contínua acima de 10 s são descartadas sem transcrever. O silêncio do VAD (proposta 3) ficou em 600 ms.
+
+Mesma carga da rodada 3 (3 clientes, 10 min, modo palavra): 234 falas, todas com o resultado esperado (99/99 perguntas, 40/40 seguintes, 40/40 "Oi?", 55/55 descartadas). Todos os 139 turnos com resposta passaram pela prévia; 7 repetiram o pedido ao LLM mudo, sem nenhuma fala de reserva.
+
+| Medida (servidor) | Rodada 3 | Rodada 4 |
+| --- | --- | --- |
+| Fim da fala → primeiro áudio, mediana | 1345 ms | **817 ms** |
+| p90 / máximo | 1548 / 1707 ms | 974 / 1273 ms |
+| Acima de 1,5 s | 16 de 132 | 0 de 139 |
+| "Oi?" (só a palavra), mediana | 667 ms | 618 ms |
+| Memória da GPU1 | 29,3–29,6 GB | 29,4–29,6 GB |
+
+Etapas na rodada 4, em ms desde a prévia (que começa com 320 ms de silêncio):
+
+| Etapa | Mediana |
+| --- | --- |
+| Whisper | 45 |
+| LLM: primeiro token | 234 |
+| Fim da fala confirmado pelo VAD (`liberado`) | 281 |
+| LLM: primeira frase pronta (até a vírgula) | 461 |
+| Primeiro áudio pronto e enviado | 496–497 |
+| Emoção | 749, depois do primeiro áudio em 138 de 139 turnos |
+
+Agora o que limita é o LLM: o primeiro áudio sai, em mediana, 215 ms depois de o VAD confirmar o fim da fala, e quase todo esse tempo é a geração da primeira frase. Em nenhum turno o áudio ficou pronto antes da confirmação. Pelos clientes, a mediana até o primeiro som foi de 559 ms para perguntas com a palavra (o Piper põe silêncio no fim de cada WAV, e por isso a medida do cliente sai menor).
+
 ### Outro achado: Whisper lento com ruído longo
 
 Às 21:55:42, a verificação da palavra no `tablet-01` passou do limite de 5 s do Whisper. A fala foi descartada e o robô seguiu normalmente. A causa provável é um trecho longo de ruído da sala: no modo palavra, uma fala pode ter até 30 s, e o Whisper inventa texto em repetição. Proposta: limitar a fala da escuta contínua a ~10 s e, depois de passar disso, cortar ou descartar.
@@ -73,3 +101,16 @@ Teste com um proxy TCP na frente do vLLM, com uma instância de teste: matar o p
 
 - `~/.local/state/robo-pegasus/turnos.jsonl` (`PEGASUS_LOG_PASTA`): uma linha JSON por turno, só com tempos, contagens e identificadores. Troca de arquivo à meia-noite e guarda 30 dias (`PEGASUS_LOG_DIAS`). O log geral (journald) também deixou de gravar texto da conversa, argumentos da ferramenta e a duração das falas descartadas.
 - `pegasus-status` (`servidor/scripts/pegasus-status`, com link em `~/.local/bin`): serviços, vLLM, API (via `/status`, só local), GPU1 e turnos do dia. Sai com 1 se o vLLM ou a API não respondem.
+
+## Conversa no modo palavra (2026-11-13)
+
+Depois de cada resposta, a escuta fica aberta por `PEGASUS_CONVERSA_S` (8 s) sem o nome; despedidas encerram na hora (ver "Conversa" em `protocolo.md`). Validação com 3 clientes por 4 minutos, que depois de cada resposta fazem uma pergunta seguinte, se despedem ou ficam calados: 99 falas, todas com o resultado esperado.
+
+| Fala | Total | Resultado | Mediana (cliente) |
+| --- | --- | --- | --- |
+| "Pegasus, pergunta" | 20 | 20 respostas | 512 ms |
+| Pergunta seguinte, sem o nome | 20 | 20 respostas | 510 ms |
+| Só "Pegasus." | 11 | 11 "Oi?" | 356 ms |
+| Fala sem a palavra, fora da conversa | 17 | 17 descartadas | — |
+| Despedida ("Tchau, Pegasus.") | 12 | 12 despedidas, sem LLM | 322 ms |
+| Silêncio na conversa | 19 | 19 voltas a esperar o nome | 7986 ms depois de a resposta tocar |

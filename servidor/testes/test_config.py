@@ -72,6 +72,7 @@ def test_resumo_publico_sem_segredos():
     resumo = resumo_publico(c)
     assert resumo == {
         "ativacao": "toque",
+        "conversa_s": 8.0,
         "emocao_modo": "paralelo",
         "llm_modelo": "qwen-teste",
         "api": "127.0.0.1:8100",
@@ -80,6 +81,7 @@ def test_resumo_publico_sem_segredos():
         "vad_silencio_ms": 600,
         "vad_previa_ms": 300,
         "memoria_turnos": 6,
+        "memoria_s": 180.0,
         "log_turnos": resumo["log_turnos"],
         "whisper": "large-v3-turbo, cuda (GPU1), float16",
         "emocao_espera_ms": 1000,
