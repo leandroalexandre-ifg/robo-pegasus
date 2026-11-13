@@ -41,6 +41,10 @@ class Cliente {
 
   static const _esperaMinima = Duration(seconds: 1);
   static const _esperaMaxima = Duration(seconds: 30);
+
+  /// Servidor cheio (4013): espera crescente própria, bem mais longa.
+  static const _esperaLimiteMinima = Duration(seconds: 15);
+  static const _esperaLimiteMaxima = Duration(minutes: 2);
   static const _limiteHello = Duration(seconds: 10);
 
   void iniciar() {
@@ -72,6 +76,7 @@ class Cliente {
 
   Future<void> _laco() async {
     var espera = _esperaMinima;
+    var esperaLimite = _esperaLimiteMinima;
     while (!_parado) {
       final (:recebeuHello, :codigo) = await _conectarUmaVez();
       if (_parado) break;
@@ -82,8 +87,15 @@ class Cliente {
         // configuração nova (trocarConfig) tenta de novo.
         await _aguardar(null);
         espera = _esperaMinima;
+        esperaLimite = _esperaLimiteMinima;
         continue;
       }
+      if (codigo == fechaLimite) {
+        await _aguardar(esperaLimite);
+        esperaLimite = _dobrar(esperaLimite, _esperaLimiteMaxima);
+        continue;
+      }
+      esperaLimite = _esperaLimiteMinima;
       if (recebeuHello) espera = _esperaMinima;
       await _aguardar(espera);
       espera = _dobrar(espera, _esperaMaxima);
@@ -173,6 +185,7 @@ class Cliente {
       fechaProtocolo => 'Erro de protocolo',
       fechaTempo => 'Tempo esgotado',
       fechaOutroAparelho => 'Conectado em outro aparelho',
+      fechaLimite => 'Servidor cheio; tentando de novo em instantes',
       _ => 'Conexão perdida',
     };
     debugPrint(

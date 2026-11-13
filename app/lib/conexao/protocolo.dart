@@ -22,6 +22,9 @@ const fechaTempo = 4008;
 /// O mesmo tablet (token) abriu outra conexão: não reconectar sozinho.
 const fechaOutroAparelho = 4009;
 
+/// Limite de sessões simultâneas do servidor: reconectar com espera maior.
+const fechaLimite = 4013;
+
 /// Estados enviados pelo servidor em `state`.
 ///
 /// `desconectado` vindo do servidor: a conexão está de pé, mas o servidor de

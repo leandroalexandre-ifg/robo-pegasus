@@ -71,4 +71,12 @@ void main() {
       expect(servidor.conexoes, 2);
     });
   }
+
+  test('4013: espera bem mais que a reconexão comum', () async {
+    servidor.codigo = fechaLimite;
+    cliente = Cliente(servidor.config)..iniciar();
+    await esperar(3000);
+    expect(servidor.conexoes, 1);
+    expect(cliente.motivo.value, startsWith('Servidor cheio'));
+  });
 }
