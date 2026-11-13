@@ -41,6 +41,7 @@ class Config:
     # Silero VAD: fim da fala sem listen_stop
     vad_limiar: float
     vad_silencio_s: float  # silêncio que encerra a fala
+    vad_previa_s: float  # silêncio com que o turno já começa, sem enviar nada; 0 desliga
     vad_sem_fala_s: float  # escuta sem nenhuma fala que volta a ocioso
 
     # Limites de tempo de cada etapa. A etapa que passa do limite encerra o turno com erro.
@@ -105,6 +106,7 @@ def carregar_config(ambiente: dict[str, str] | None = None) -> Config:
         persona_arquivo=Path(env.get("PEGASUS_PERSONA", str(SERVIDOR / "persona.toml"))),
         vad_limiar=float(env.get("PEGASUS_VAD_LIMIAR", "0.5")),
         vad_silencio_s=int(env.get("PEGASUS_VAD_SILENCIO_MS", "600")) / 1000,
+        vad_previa_s=int(env.get("PEGASUS_VAD_PREVIA_MS", "300")) / 1000,
         vad_sem_fala_s=int(env.get("PEGASUS_VAD_SEM_FALA_MS", "8000")) / 1000,
         stt_limite_s=int(env.get("PEGASUS_STT_LIMITE_MS", "5000")) / 1000,
         llm_limite_s=int(env.get("PEGASUS_LLM_LIMITE_MS", "10000")) / 1000,
@@ -132,6 +134,7 @@ def resumo_publico(config: Config) -> dict[str, object]:
         "voz": config.piper_voz.stem,
         "persona": str(config.persona_arquivo),
         "vad_silencio_ms": round(config.vad_silencio_s * 1000),
+        "vad_previa_ms": round(config.vad_previa_s * 1000),
         "memoria_turnos": config.memoria_turnos,
         "log_turnos": f"{config.log_pasta} ({config.log_dias} dias)",
         "whisper": f"{config.whisper_modelo}, {whisper}, {config.whisper_precisao}",

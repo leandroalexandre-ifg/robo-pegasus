@@ -78,6 +78,7 @@ def test_resumo_publico_sem_segredos():
         "voz": "pt_BR-faber-medium",
         "persona": str(SERVIDOR / "persona.toml"),
         "vad_silencio_ms": 600,
+        "vad_previa_ms": 300,
         "memoria_turnos": 6,
         "log_turnos": resumo["log_turnos"],
         "whisper": "large-v3-turbo, cuda (GPU1), float16",

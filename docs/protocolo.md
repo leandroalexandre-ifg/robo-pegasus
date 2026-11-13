@@ -50,6 +50,8 @@ Tablet                                   Servidor
 
 **Fim da fala:** o servidor detecta sozinho, com o Silero VAD, quando o usuário parou de falar: depois de `PEGASUS_VAD_SILENCIO_MS` (padrão 600 ms) de silêncio após a fala, a escuta termina e o servidor envia `state "pensando"`. O tablet não precisa enviar `listen_stop`, mas pode, para encerrar antes.
 
+**Prévia:** com `PEGASUS_VAD_PREVIA_MS` (padrão 300 ms) de silêncio, o servidor já começa o turno: transcreve, verifica a palavra de ativação e gera a primeira frase e a voz dela. Ele não envia nada ao tablet antes de completar `PEGASUS_VAD_SILENCIO_MS` (ou de receber `listen_stop`). Se a pessoa voltar a falar nesse meio-tempo, o servidor descarta a prévia sem deixar rastro e espera a fala terminar de novo. Para o tablet, nada muda: as mensagens e a ordem delas são as mesmas, só chegam mais cedo. `PEGASUS_VAD_PREVIA_MS=0` desliga a prévia.
+
 **Meio-duplex:** no modo `toque`, o tablet desliga o microfone ao receber `state "pensando"` (ou `state "ocioso"`) e só volta a ouvir com um novo `listen_start`. O servidor ignora áudio recebido fora do estado `ouvindo`. No modo `palavra`, veja a seção a seguir.
 
 ## Ativação: toque ou palavra

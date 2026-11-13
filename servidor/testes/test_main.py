@@ -534,6 +534,115 @@ def test_fala_longa_na_escuta_continua_e_descartada_sem_transcrever(
     assert pipeline["transcritos"] == []
 
 
+class _DetectorRetoma(_DetectorFalso):
+    """Fala de 0,5 a 1,5 s, pausa (a prévia começa aos 1,8 s), volta a falar aos 1,9 s
+    até 2,5 s; o fim é decidido aos 3,1 s."""
+
+    roteiro = (0.5, 1.5, 3.1)
+
+    def processar(self, pcm):
+        if self.terminou:
+            return None
+        self._amostras += len(pcm) // 2
+        agora = self._amostras / 16_000
+        if self.inicio is None and agora >= 0.5:
+            self.inicio = 8_000
+            return "inicio"
+        if 1.9 <= agora < 2.5:
+            self.fim = None  # voltou a falar
+        elif agora >= 1.5:
+            self._fim_s = 1.5 if agora < 1.9 else 2.5
+            self.fim = round(self._fim_s * 16_000)
+        if agora >= 3.1:
+            self.terminou = True
+            return "fim"
+        return None
+
+
+def _transcricoes(monkeypatch, texto):
+    duracoes = []
+
+    async def transcrever(audio, config):
+        duracoes.append(len(audio) / 16_000)
+        return texto
+
+    monkeypatch.setattr(stt, "transcrever", transcrever)
+    return duracoes
+
+
+def _escutar(ws, segundos):
+    ws.send_json({"type": "listen_start"})
+    assert ws.receive_json()["state"] == "ouvindo"
+    _enviar_audio(ws, segundos)
+
+
+def test_previa_comeca_o_turno_antes_do_fim_da_fala(cliente, pipeline, monkeypatch):
+    monkeypatch.setattr(sessao_mod, "DetectorFala", _DetectorFalso)
+    with cliente.websocket_connect("/ws") as ws:
+        _conectar(ws)
+        _escutar(ws, 3.0)  # prévia aos 1,8 s (300 ms de silêncio); fim aos 2,1 s
+        recebidas = _receber_ate_ocioso(ws)
+    assert _tipos(recebidas)[:4] == ["pensando", "stt", "emotion", "falando"]
+    [r] = _registros(pipeline)
+    assert r["tipo"] == "turno" and r["fim_escuta"] == "vad"
+    assert "liberado" in r["ms"]
+    assert r["ms"]["vad"] == 300  # o turno conta desde a prévia, com o silêncio já passado
+    assert pipeline["audio_s"] == pytest.approx(1.5)
+
+
+def test_previa_desligada(monkeypatch, pipeline):
+    monkeypatch.setenv("PEGASUS_VAD_PREVIA_MS", "0")
+    monkeypatch.setattr(sessao_mod, "DetectorFala", _DetectorFalso)
+    with TestClient(main.app) as c, c.websocket_connect("/ws") as ws:
+        _conectar(ws)
+        _escutar(ws, 3.0)
+        _receber_ate_ocioso(ws)
+    [r] = _registros(pipeline)
+    assert "liberado" not in r["ms"]
+    assert r["ms"]["vad"] == 600
+
+
+def test_previa_e_cancelada_quando_a_pessoa_volta_a_falar(cliente, pipeline, monkeypatch):
+    monkeypatch.setattr(sessao_mod, "DetectorFala", _DetectorRetoma)
+    duracoes = _transcricoes(monkeypatch, "qual é o seu nome?")
+    with cliente.websocket_connect("/ws") as ws:
+        _conectar(ws)
+        _escutar(ws, 3.5)
+        recebidas = _receber_ate_ocioso(ws)
+    assert _tipos(recebidas).count("stt") == 1
+    assert _tipos(recebidas)[:2] == ["pensando", "stt"]
+    # a resposta é da fala inteira, de 0,2 s (0,5 - 0,3) a 2,7 s (2,5 + 0,2)
+    assert duracoes[-1] == pytest.approx(2.5)
+    [r] = _registros(pipeline)  # a prévia cancelada não deixa registro
+    assert r["tipo"] == "turno"
+
+
+def test_abort_durante_a_previa_nao_envia_nada(cliente, pipeline, monkeypatch):
+    monkeypatch.setattr(sessao_mod, "DetectorFala", _DetectorFalso)
+    with cliente.websocket_connect("/ws") as ws:
+        _conectar(ws)
+        _escutar(ws, 2.0)  # a prévia começou aos 1,8 s; o fim seria aos 2,1 s
+        time.sleep(0.1)
+        ws.send_json({"type": "abort"})
+        assert ws.receive_json() == {"type": "state", "state": "ocioso"}
+        _nada_mais_foi_enviado(ws)
+    assert pipeline["turnos"].read_text() == ""
+
+
+def test_previa_no_modo_palavra_cancelada_ao_voltar_a_falar(escuta_continua, pipeline, monkeypatch):
+    monkeypatch.setattr(sessao_mod, "DetectorFala", _DetectorRetoma)
+    duracoes = _transcricoes(monkeypatch, "Pegasus, qual é o seu nome?")
+    with escuta_continua.websocket_connect("/ws") as ws:
+        _conectar_continuo(ws)
+        _enviar_audio(ws, 3.5)
+        recebidas = _receber_ate_ocioso(ws)
+    assert _tipos(recebidas)[:3] == ["pensando", "stt", "emotion"]
+    assert _tipos(recebidas).count("stt") == 1
+    assert duracoes[-1] == pytest.approx(2.5)
+    [r] = _registros(pipeline)
+    assert r["tipo"] == "turno" and "liberado" in r["ms"]
+
+
 def _registros(pipeline):
     linhas = pipeline["turnos"].read_text().splitlines()
     return [json.loads(linha) for linha in linhas]
