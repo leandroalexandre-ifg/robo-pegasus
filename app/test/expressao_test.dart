@@ -47,4 +47,21 @@ void main() {
     expect(Expressao.lerp(a, b, 1).abertura, 0);
     expect(Expressao.lerp(a, b, 0.5).sorriso, closeTo(0.5, 1e-9));
   });
+
+  test('esperando o nome é relaxado; conversando é atento', () {
+    final esperando = Expressao.para(
+      EstadoRosto.ocioso,
+      Emocao.neutro,
+      esperandoNome: true,
+    );
+    final ocioso = Expressao.para(EstadoRosto.ocioso, Emocao.neutro);
+    final ouvindo = Expressao.para(
+      EstadoRosto.ouvindo,
+      Emocao.neutro,
+      esperandoNome: true, // não muda a escuta
+    );
+    expect(esperando.abertura, lessThan(ocioso.abertura));
+    expect(ouvindo.abertura, greaterThan(ocioso.abertura));
+    expect(ouvindo.largura, greaterThan(ocioso.largura));
+  });
 }

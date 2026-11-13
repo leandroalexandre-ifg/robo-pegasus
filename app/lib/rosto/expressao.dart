@@ -100,15 +100,28 @@ class Expressao {
   };
 
   /// Expressão-alvo para o estado com a emoção sobreposta.
-  static Expressao para(EstadoRosto estado, Emocao emocao) {
+  ///
+  /// [esperandoNome] (modo palavra, ocioso com o microfone aberto) deixa o
+  /// rosto relaxado, com as pálpebras um pouco baixas, para contrastar com o
+  /// rosto atento de quando está conversando.
+  static Expressao para(
+    EstadoRosto estado,
+    Emocao emocao, {
+    bool esperandoNome = false,
+  }) {
     final base = daEmocao(emocao);
     return switch (estado) {
+      EstadoRosto.ocioso when esperandoNome => base.copiar(
+        abertura: base.abertura * 0.88,
+      ),
       EstadoRosto.ocioso || EstadoRosto.falando => base,
-      // Atento: olhos um pouco mais abertos, voltados para quem fala.
+      // Atento (conversando): olhos mais abertos e largos, voltados para
+      // quem fala.
       EstadoRosto.ouvindo => base.copiar(
-        abertura: base.abertura * 1.1,
-        olharX: base.olharX * 0.3,
-        olharY: base.olharY * 0.3,
+        abertura: base.abertura * 1.15,
+        largura: base.largura * 1.04,
+        olharX: base.olharX * 0.2,
+        olharY: base.olharY * 0.2,
       ),
       // Olha para cima e para o lado, com os olhos meio apertados.
       EstadoRosto.pensando => base.copiar(
@@ -130,13 +143,14 @@ class Expressao {
 
   Expressao copiar({
     double? abertura,
+    double? largura,
     double? larguraBoca,
     double? olharX,
     double? olharY,
     double? inclinacao,
   }) => Expressao(
     abertura: abertura ?? this.abertura,
-    largura: largura,
+    largura: largura ?? this.largura,
     palpebraInterna: palpebraInterna,
     palpebraExterna: palpebraExterna,
     palpebraInferior: palpebraInferior,
