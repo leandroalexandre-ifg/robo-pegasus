@@ -112,7 +112,7 @@ Regras do servidor:
 
 - `PEGASUS_FERRAMENTAS=data_hora,clima,wikipedia,busca_web` (vazio desliga). Código em `servidor/app/ferramentas/`.
 - `data_hora` não é ferramenta: a fala atual vai ao LLM com `[agora: …]` na frente (fuso `PEGASUS_FUSO`), sem rodada extra.
-- `clima` (Open-Meteo, cidade padrão `PEGASUS_CIDADE=Goiânia`), `wikipedia` (pt.wikipedia) e `busca_web` (SearXNG local) são oferecidas na requisição da fala. Ao chamar uma, o robô diz "Deixa eu ver…" (já sintetizada), consulta com limite (2 s, 2 s, 3 s; 4 s no total) e responde numa segunda requisição **sem ferramentas**, começando pela fonte ("Segundo a Wikipédia, …", via `continue_final_message`).
+- `clima` (Open-Meteo, cidade padrão `PEGASUS_CIDADE=Goiânia`), `wikipedia` (pt.wikipedia) e `busca_web` (SearXNG local) são oferecidas na requisição da fala. Ao chamar uma, o robô diz "Deixa eu ver…" (já sintetizada), consulta com limite (clima 2,5 s, wikipedia 2 s, busca 3 s; 4 s no total) e responde numa segunda requisição **sem ferramentas**, começando pela fonte ("Segundo a Wikipédia, …", via `continue_final_message`).
 - Nenhuma ferramenta aceita URL do modelo. O texto externo é limpo (`limpeza.py`) e vai entre `DADOS EXTERNOS` e `FIM DOS DADOS EXTERNOS`; não entra na memória nem no registro (só nome, ok, ms e caracteres).
 - SearXNG: `pegasus-busca.service` (Docker, imagem fixada pelo digest, só `127.0.0.1:8104`, sem root, sem GPU, SafeSearch estrito, DuckDuckGo/Brave/Bing/Wikipedia). Segredo em `~/.config/robo-pegasus/searxng.env`. O daemon Docker é compartilhado: só mexa no contêiner `pegasus-searxng`.
 - User-Agent `RoboPegasus/0.1 (+URL do repositório)`, sem e-mail.
