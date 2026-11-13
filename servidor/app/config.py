@@ -43,6 +43,7 @@ class Config:
     vad_silencio_s: float  # silêncio que encerra a fala
     vad_previa_s: float  # silêncio com que o turno já começa, sem enviar nada; 0 desliga
     vad_sem_fala_s: float  # escuta sem nenhuma fala que volta a ocioso
+    conversa_s: float  # modo palavra: escuta aberta depois de cada resposta; 0 desliga
 
     # Limites de tempo de cada etapa. A etapa que passa do limite encerra o turno com erro.
     stt_limite_s: float  # transcrição de uma fala
@@ -108,6 +109,7 @@ def carregar_config(ambiente: dict[str, str] | None = None) -> Config:
         vad_silencio_s=int(env.get("PEGASUS_VAD_SILENCIO_MS", "600")) / 1000,
         vad_previa_s=int(env.get("PEGASUS_VAD_PREVIA_MS", "300")) / 1000,
         vad_sem_fala_s=int(env.get("PEGASUS_VAD_SEM_FALA_MS", "8000")) / 1000,
+        conversa_s=float(env.get("PEGASUS_CONVERSA_S", "8")),
         stt_limite_s=int(env.get("PEGASUS_STT_LIMITE_MS", "5000")) / 1000,
         llm_limite_s=int(env.get("PEGASUS_LLM_LIMITE_MS", "10000")) / 1000,
         tts_limite_s=int(env.get("PEGASUS_TTS_LIMITE_MS", "5000")) / 1000,
@@ -128,6 +130,7 @@ def resumo_publico(config: Config) -> dict[str, object]:
         whisper = f"cuda (GPU{config.whisper_gpu})"
     resumo: dict[str, object] = {
         "ativacao": config.ativacao,
+        "conversa_s": config.conversa_s,
         "emocao_modo": config.emocao_modo,
         "llm_modelo": config.llm_modelo or "(primeiro de /v1/models)",
         "api": f"{config.api_host}:{config.api_porta}",

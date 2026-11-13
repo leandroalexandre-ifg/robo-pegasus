@@ -28,7 +28,7 @@ CAMPOS = frozenset(
         "erro",
     }
 )
-TIPOS = frozenset({"turno", "sem_fala", "ativacao", "falha", "interrompido"})
+TIPOS = frozenset({"turno", "sem_fala", "ativacao", "despedida", "falha", "interrompido"})
 
 # Resumo em memória para o /status: contagem por tipo e latências recentes.
 contagem: collections.Counter[str] = collections.Counter()

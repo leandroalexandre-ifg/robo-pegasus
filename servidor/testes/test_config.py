@@ -72,6 +72,7 @@ def test_resumo_publico_sem_segredos():
     resumo = resumo_publico(c)
     assert resumo == {
         "ativacao": "toque",
+        "conversa_s": 8.0,
         "emocao_modo": "paralelo",
         "llm_modelo": "qwen-teste",
         "api": "127.0.0.1:8100",
