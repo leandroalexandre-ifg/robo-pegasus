@@ -6,6 +6,7 @@ import threading
 from piper import PiperVoice
 
 from app.config import Config
+from app.pipeline.voz import para_voz
 
 _voz: PiperVoice | None = None
 _trava = asyncio.Lock()
@@ -30,8 +31,10 @@ def _sintetizar(voz: PiperVoice, texto: str, parar: threading.Event) -> bytes:
 
 
 async def sintetizar(texto: str, config: Config) -> tuple[bytes, int]:
-    """Devolve PCM 16 bits mono e a taxa de amostragem da voz (22,05 kHz na faber)."""
+    """Devolve PCM 16 bits mono e a taxa de amostragem da voz (22,05 kHz na faber).
+    O texto passa antes por para_voz (números, moeda, horas…)."""
     voz = await carregar(config)
+    texto = para_voz(texto)
     parar = threading.Event()
     try:
         pcm = await asyncio.to_thread(_sintetizar, voz, texto, parar)
