@@ -204,6 +204,31 @@ async def _depois_das_consultas(
         yield pedaco
 
 
+def _prompt_da_fala(config: Config) -> tuple[str, list[dict]]:
+    """Prompt de sistema e ferramentas da requisição da fala: o começo fixo do prompt,
+    igual em todo turno (o aquecimento do cache usa o mesmo)."""
+    oferecidas = ferramentas_rede.definicoes(config)
+    sistema = _sistema(config)
+    if config.emocao_modo == "antes":
+        oferecidas = [FERRAMENTA, *oferecidas]
+        sistema += f"\n{persona.PROMPT_EMOCAO}"
+    if ferramentas_rede.ativas_de_rede(config):
+        sistema += f"\n{ferramentas_rede.PROMPT}"
+    return sistema, oferecidas
+
+
+def prefixos_fixos(config: Config) -> list[tuple[str, list[dict]]]:
+    """(sistema, ferramentas) de cada tipo de requisição: a da fala, a segunda rodada
+    depois de uma consulta (sem ferramentas) e a da emoção em paralelo."""
+    sistema, oferecidas = _prompt_da_fala(config)
+    prefixos = [(sistema, oferecidas)]
+    if oferecidas:
+        prefixos.append((sistema, []))
+    if config.emocao_modo == "paralelo":
+        prefixos.append((persona.prompt_sistema(config), [FERRAMENTA]))
+    return prefixos
+
+
 async def gerar(
     texto_usuario: str, config: Config, historico: Historico = ()
 ) -> AsyncIterator[str | Emocao | Espera | Consulta]:
@@ -220,13 +245,7 @@ async def gerar(
     `historico` são os turnos anteriores da sessão."""
     cliente, modelo = await _preparar(config)
     rede = ferramentas_rede.ativas_de_rede(config)
-    oferecidas = ferramentas_rede.definicoes(config)
-    sistema = _sistema(config)
-    if config.emocao_modo == "antes":
-        oferecidas = [FERRAMENTA, *oferecidas]
-        sistema += f"\n{persona.PROMPT_EMOCAO}"
-    if rede:
-        sistema += f"\n{ferramentas_rede.PROMPT}"
+    sistema, oferecidas = _prompt_da_fala(config)
     mensagens = _mensagens(_fala_atual(texto_usuario, config), sistema, historico)
     if not oferecidas:
         async for pedaco in _texto_limpo(_fluxo(cliente, modelo, mensagens, config)):

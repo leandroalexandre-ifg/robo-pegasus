@@ -18,7 +18,7 @@ from contextlib import asynccontextmanager
 import numpy as np
 from fastapi import FastAPI, HTTPException, Request, WebSocket
 
-from app import ferramentas, persona, registro, saude, seguranca
+from app import aquecimento, ferramentas, persona, registro, saude, seguranca
 from app.config import Config, carregar_config, resumo_publico
 from app.ferramentas import rede
 from app.pipeline import stt, tts, turno, vad
@@ -85,18 +85,22 @@ async def lifespan(app: FastAPI):
         await asyncio.gather(*(s.ao_llm(disponivel) for s in list(sessoes)), return_exceptions=True)
 
     # Em segundo plano: a API sobe mesmo sem internet.
-    aquecimento = asyncio.create_task(ferramentas.preaquecer(config))
+    aquecimento_ferramentas = asyncio.create_task(ferramentas.preaquecer(config))
 
     monitor = saude.MonitorLLM(saude.verificador_http(config), avisar)
     app.state.monitor = monitor
     await monitor.iniciar()
+    aquecedor = aquecimento.Aquecedor(config)
+    aquece_cache = asyncio.create_task(aquecedor.rodar(lambda: monitor.disponivel))
     if not monitor.disponivel:
         log.error("LLM fora do ar na subida; os tablets ficam em desconectado até ele subir")
     try:
         yield
     finally:
         await monitor.parar()
-        aquecimento.cancel()
+        aquecimento_ferramentas.cancel()
+        aquece_cache.cancel()
+        await aquecedor.fechar()
         await rede.fechar()
 
 

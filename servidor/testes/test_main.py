@@ -8,7 +8,7 @@ import pytest
 from fastapi.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect
 
-from app import ferramentas, main, saude
+from app import aquecimento, ferramentas, main, saude
 from app import sessao as sessao_mod
 from app.pipeline import llm, stt, tts, turno
 from app.pipeline.emocao import Emocao
@@ -65,6 +65,11 @@ def pipeline(monkeypatch, tmp_path):
 
     monkeypatch.setattr(main, "preparar_modelos", preparar_modelos)
     monkeypatch.setattr(ferramentas, "preaquecer", sem_internet)
+
+    async def sem_aquecer(self, disponivel):
+        return None
+
+    monkeypatch.setattr(aquecimento.Aquecedor, "rodar", sem_aquecer)
     monkeypatch.setattr(stt, "transcrever", transcrever)
     monkeypatch.setattr(llm, "gerar", gerar)
     monkeypatch.setattr(tts, "sintetizar", sintetizar)
