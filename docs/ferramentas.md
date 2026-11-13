@@ -2,6 +2,44 @@
 
 Resumo do funcionamento em `CLAUDE.md` ("Ferramentas de internet do LLM"); código em `servidor/app/ferramentas/`.
 
+## Busca obrigatória, divergência, voz e ativação (2026-11-13, fim da tarde)
+
+**Busca obrigatória.** Com termo de tempo ou atualidade na fala, detectado no servidor, a requisição vai com `tool_choice` nomeado para a `busca_web`. Mesmas 10 perguntas, 3 vezes cada: busca em 30 de 30, sem nada dito antes da consulta (era 1 de 30 de memória). Gerar os argumentos leva o mesmo que antes (~370–470 ms do nome da ferramenta ao fim da chamada). Falas como "quem é a Cora Coralina?" passam a ir à busca em vez da Wikipédia.
+
+**Divergência.** Testes com resultados de busca controlados (3 perguntas com resultados que discordam, 2 com resultados que concordam):
+
+| Versão | Divergentes sem afirmar | Concordantes respondidos |
+| --- | --- | --- |
+| Antes | 0 de 9 | 6 de 6 |
+| Instrução no prompt de sistema | 5 de 9 | 6 de 6 |
+| Instrução também junto dos resultados | 8 de 12 | 8 de 8 |
+| Conferência à parte (implementada) | 12 de 12 | 8 de 8 |
+
+Só com instruções, o modelo seguia o primeiro resultado, puxado pelo "Segundo uma busca na internet,". A conferência é um pedido separado ao LLM, com temperatura 0 e saída restrita a `concordam` ou `divergem` (~70 ms sozinho), feito em paralelo com a resposta e esperado no primeiro pedaço dela. Com as buscas reais das 10 perguntas, 0 de 30 foram marcadas como divergentes, inclusive quando os resultados eram só ruído. Custo: do fim da consulta ao primeiro token, ~120 → ~225 ms.
+
+**Medição** (`medir_ferramentas.py`, 2 rodadas, instância temporária na porta 8102 com o código novo):
+
+| Grupo | Turnos válidos | Com "Deixa eu ver…" | 1º som (mediana / p90 / máx) | Resposta (mediana / p90 / máx) |
+| --- | --- | --- | --- | --- |
+| Sem ferramentas | 12 | 0 | 624 / 625 / 625 ms | igual |
+| Data e hora | 6 | 0 | 604 / 629 / 629 ms | igual |
+| Clima | 10 | 9 | 604 / 625 / 625 ms | 958 / 2139 / 2139 ms |
+| Wikipédia | 10 | 7 | 614 / 1017 / 1017 ms | 1006 / 1280 / 1280 ms |
+| Busca | 10 | 10 | 603 / 625 / 625 ms | 1619 / 1856 / 1856 ms |
+
+A resposta com busca subiu de 1386 para 1619 ms de mediana: ~100 ms são da conferência; o resto varia com o tempo da própria busca e com o cache dela.
+
+**As 6 de 48 falas descartadas.** A reprodução fora da API (o mesmo `Sessao._vigiar`, com VAD, prévia, recorte e Whisper) descartou 7 de 72. Em todas, o Whisper errou só o começo do nome: "Heide Azuz", "Feio Azul", "Ei, Gazus", "Erasus", ou nenhuma palavra. O "-asus" sempre chega, então o recorte não perde áudio. A causa é a voz sintética: com o nome no começo do texto, o Piper enfraquece a primeira consoante da fala, e o espeak ainda fonemiza "Pegasus" como oxítona (/pega'zus/). Em 100 falas por variante, com as 5 perguntas que mais falhavam:
+
+| Fala sintetizada | Descartadas (beam 1) | Beam 5 |
+| --- | --- | --- |
+| "Pegasus, …" | 26 | 16 |
+| "Pégasus, …" | 20 | 16 |
+| "Ei, Pegasus, …" | 6 (5 viraram "E aí, Pegasus") | 9 |
+| "Ei, Pégasus, …" | 2 | 0 |
+
+Mudanças: "E aí" passou a valer como chamamento; a voz do robô diz "Pégasus"; a medição usa "Ei, Pegasus, …". Com isso, 0 de 72 na reprodução e 0 de 48 na medição. O prompt do Whisper ("Pegasus.", "Ei, Pegasus.") não ajudou, e o beam 5 só ajuda com a voz ruim, a +15 ms por fala. Falta medir com voz humana: estes números valem para a voz do Piper.
+
 ## Medição com o cache de prefixo aquecido (2026-11-13, tarde)
 
 Mesmo método da medição abaixo, depois do `--prefix-match-unit 16` no vLLM, do aquecimento do trecho fixo do prompt (`servidor/app/aquecimento.py`), do clima citado como "a previsão do tempo" e do prompt novo da busca. Taxa de acerto do cache no vLLM: ~72–76% (era 0%).
