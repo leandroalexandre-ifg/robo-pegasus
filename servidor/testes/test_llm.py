@@ -223,7 +223,20 @@ def _gerar_com(
 
 
 @pytest.fixture
-def consultas(monkeypatch):
+def vereditos(monkeypatch):
+    """Vereditos da conferência de divergência, um por chamada (padrão: concordam)."""
+    pedidos, respostas = [], []
+
+    async def divergem(pergunta, consulta, resultados, config):
+        pedidos.append((pergunta, consulta, resultados))
+        return respostas.pop(0) if respostas else False
+
+    monkeypatch.setattr(llm, "resultados_divergem", divergem)
+    return pedidos, respostas
+
+
+@pytest.fixture
+def consultas(monkeypatch, vereditos):
     from app import ferramentas
 
     feitas, respostas = [], []
@@ -382,3 +395,61 @@ def test_sem_busca_ligada_nao_obriga(cliente):
     respostas.append(_Fluxo([_texto("Oi!")]))
     _gerar_com("clima,wikipedia", fala="Quem é o atual presidente da França?")
     assert pedidos[0]["tool_choice"] == "auto"
+
+
+def _busca_e_resposta(cliente, consultas, *textos):
+    respostas, _ = cliente
+    consultas[1].append([_consulta("busca_web", fonte="uma busca na internet", texto="R1. R2.")])
+    respostas.append(_Fluxo([_chamada("busca_web", '{"consulta": "dólar hoje"}')]))
+    respostas.append(_Fluxo([_texto(t) for t in textos]))
+
+
+def test_resultados_divergentes_nao_sao_afirmados(cliente, consultas, vereditos):
+    from app.ferramentas import FALA_DIVERGENTE, Divergencia
+
+    _busca_e_resposta(cliente, consultas, " o dólar está a", " cinco reais.")
+    vereditos[1].append(True)
+    itens = _gerar_com(fala="Qual é a cotação do dólar hoje?")
+    assert Divergencia() in itens
+    assert [x for x in itens if isinstance(x, str)] == [FALA_DIVERGENTE]
+    assert vereditos[0] == [("Qual é a cotação do dólar hoje?", "dólar hoje", "R1. R2.")]
+
+
+def test_resultados_concordantes_seguem_com_a_citacao(cliente, consultas, vereditos):
+    from app.ferramentas import Divergencia
+
+    _busca_e_resposta(cliente, consultas, " o dólar está a", " cinco reais.")
+    itens = _gerar_com(fala="Qual é a cotação do dólar hoje?")
+    assert Divergencia() not in itens
+    textos = [x for x in itens if isinstance(x, str)]
+    assert textos == ["Segundo uma busca na internet,", " o dólar está a", " cinco reais."]
+
+
+def test_falha_na_conferencia_segue_a_resposta(cliente, consultas, monkeypatch):
+    async def falha(*_):
+        raise TimeoutError
+
+    monkeypatch.setattr(llm, "resultados_divergem", falha)
+    _busca_e_resposta(cliente, consultas, " cinco reais.")
+    textos = [x for x in _gerar_com(fala="Qual é a cotação do dólar hoje?") if isinstance(x, str)]
+    assert textos == ["Segundo uma busca na internet,", " cinco reais."]
+
+
+def test_wikipedia_nao_e_conferida(cliente, consultas, vereditos):
+    respostas, _ = cliente
+    consultas[1].append([_consulta()])
+    respostas.append(_Fluxo([_chamada("wikipedia", '{"assunto": "x"}')]))
+    respostas.append(_Fluxo([_texto(" ele foi.")]))
+    _gerar_com()
+    assert vereditos[0] == []
+
+
+def test_conferencia_restrita_a_dois_vereditos(cliente):
+    respostas, pedidos = cliente
+    respostas.append(NS(choices=[NS(message=NS(content="divergem"))]))
+    config = carregar_config({})
+    assert asyncio.run(llm.resultados_divergem("p", "c", "r", config)) is True
+    pedido = pedidos[0]
+    assert pedido["temperature"] == 0
+    assert pedido["extra_body"]["structured_outputs"] == {"choice": ["concordam", "divergem"]}
+    assert "tools" not in pedido

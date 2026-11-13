@@ -1,5 +1,6 @@
 """Texto → resposta com o LLM servido pelo vLLM (API compatível com OpenAI)."""
 
+import asyncio
 import logging
 import re
 from collections.abc import AsyncIterator, Sequence
@@ -11,7 +12,7 @@ from openai import AsyncOpenAI
 from app import ferramentas as ferramentas_rede
 from app import persona
 from app.config import Config
-from app.ferramentas import Consulta, Espera, atualidade
+from app.ferramentas import FALA_DIVERGENTE, Consulta, Divergencia, Espera, atualidade
 from app.ferramentas.agora import agora
 from app.pipeline.emocao import FERRAMENTA, Emocao, cortar_marcacoes, emocao_da_chamada
 
@@ -181,34 +182,108 @@ def _emocoes(chamadas: dict[int, dict], rede: Sequence[str]) -> list[Emocao]:
     return emocoes
 
 
+SISTEMA_DIVERGENCIA = (
+    "Você confere resultados de busca. Responda se eles concordam ou divergem sobre a "
+    "resposta à pergunta. Divergem quando dão valores, nomes, datas ou placares diferentes "
+    "para a mesma coisa. Resultados que falam de assuntos diferentes, ou em que só um "
+    "responde, concordam."
+)
+_VEREDITOS = ["concordam", "divergem"]
+LIMITE_DIVERGENCIA_S = 1.5
+
+
+async def resultados_divergem(
+    pergunta: str, consulta: str, resultados: str, config: Config
+) -> bool:
+    """Pergunta ao LLM se os resultados da busca discordam entre si. A saída é
+    restrita a "concordam" ou "divergem" (~70 ms); um texto de página pode, no
+    máximo, trocar o veredito."""
+    cliente, modelo = await _preparar(config)
+    resposta = await cliente.chat.completions.create(
+        model=modelo,
+        messages=[
+            {"role": "system", "content": SISTEMA_DIVERGENCIA},
+            {
+                "role": "user",
+                "content": f"Pergunta: {pergunta}\nBusca: {consulta}\nResultados:\n{resultados}",
+            },
+        ],
+        max_tokens=4,
+        temperature=0,
+        extra_body=_SEM_RACIOCINIO | {"structured_outputs": {"choice": _VEREDITOS}},
+    )
+    return (resposta.choices[0].message.content or "").strip() == "divergem"
+
+
+async def _divergem(conferencia: asyncio.Task | None) -> bool:
+    """O veredito da conferência; sem ele (falha ou demora), a resposta segue normal."""
+    if conferencia is None:
+        return False
+    try:
+        return await asyncio.wait_for(asyncio.shield(conferencia), LIMITE_DIVERGENCIA_S)
+    except Exception as e:
+        log.warning("conferência dos resultados da busca falhou: %s", type(e).__name__)
+        return False
+
+
 async def _depois_das_consultas(
     cliente: AsyncOpenAI,
     modelo: str,
     mensagens: list[dict],
     config: Config,
     consultas: list[Consulta],
-) -> AsyncIterator[str]:
+    conferencia: asyncio.Task | None = None,
+) -> AsyncIterator[str | Divergencia]:
     """Segunda requisição, sem ferramentas, com os resultados. Se alguma fonte deu
     resultado, a fala começa citando-a ("Segundo a Wikipédia,"): o texto vai na
     mensagem do assistente e o LLM continua a frase. A citação só sai junto com o
-    primeiro pedaço do LLM; se a continuação vier vazia, repete sem a citação."""
-    if citacao := ferramentas_rede.citacao(consultas):
-        com_citacao = mensagens + [{"role": "assistant", "content": citacao}]
-        citada = False
-        async for pedaco in _texto_limpo(
-            _fluxo(cliente, modelo, com_citacao, config, continuar=True)
-        ):
-            if not citada and _TEM_TEXTO.search(pedaco):
-                citada = True
-                # A continuação às vezes já vem com o espaço; outras, não.
-                yield citacao if pedaco[:1].isspace() else f"{citacao} "
-            if citada:
-                yield pedaco
-        if citada:
+    primeiro pedaço do LLM; se a continuação vier vazia, repete sem a citação.
+
+    `conferencia` (resultados_divergem, em paralelo) é esperada quando chega o
+    primeiro pedaço: se os resultados divergem, a geração para e o robô diz
+    FALA_DIVERGENTE, sem afirmar nenhum deles."""
+    citacao = ferramentas_rede.citacao(consultas)
+    tentativas = [(mensagens + [{"role": "assistant", "content": citacao}], citacao)]
+    if not citacao:
+        tentativas = []
+    tentativas.append((mensagens, None))
+    for pedido, citar in tentativas:
+        comecou = False
+        fluxo = _fluxo(cliente, modelo, pedido, config, continuar=citar is not None)
+        async with aclosing(_texto_limpo(fluxo)) as pedacos:
+            async for pedaco in pedacos:
+                if not comecou and _TEM_TEXTO.search(pedaco):
+                    comecou = True
+                    if await _divergem(conferencia):
+                        log.info("resultados da busca divergem; o robô não afirma nenhum")
+                        yield Divergencia()
+                        yield FALA_DIVERGENTE
+                        return
+                    if citar:
+                        # A continuação às vezes já vem com o espaço; outras, não.
+                        yield citar if pedaco[:1].isspace() else f"{citar} "
+                if comecou:
+                    yield pedaco
+        if comecou:
             return
-        log.warning("o LLM não continuou a citação; repetindo sem ela")
-    async for pedaco in _texto_limpo(_fluxo(cliente, modelo, mensagens, config)):
-        yield pedaco
+        if citar:
+            log.warning("o LLM não continuou a citação; repetindo sem ela")
+
+
+def _conferir(
+    pergunta: str, chamadas: dict[int, dict], consultas: list[Consulta], config: Config
+) -> asyncio.Task | None:
+    """Começa a conferir, em paralelo com a resposta, se os resultados da busca_web
+    divergem. Só a busca: Wikipédia e clima vêm de uma fonte só."""
+    for chamada, consulta in zip(chamadas.values(), consultas, strict=False):
+        if consulta.nome == "busca_web" and consulta.ok and consulta.fonte:
+            argumentos = ferramentas_rede._argumentos(chamada["args"])
+            termos = argumentos.get("consulta")
+            termos = termos if isinstance(termos, str) else ""
+            return asyncio.create_task(
+                resultados_divergem(pergunta, termos[:100], consulta.texto, config)
+            )
+    return None
 
 
 def _prompt_da_fala(config: Config) -> tuple[str, list[dict]]:
@@ -233,12 +308,14 @@ def prefixos_fixos(config: Config) -> list[tuple[str, list[dict]]]:
         prefixos.append((sistema, []))
     if config.emocao_modo == "paralelo":
         prefixos.append((persona.prompt_sistema(config), [FERRAMENTA]))
+    if "busca_web" in ferramentas_rede.ativas_de_rede(config):
+        prefixos.append((SISTEMA_DIVERGENCIA, []))
     return prefixos
 
 
 async def gerar(
     texto_usuario: str, config: Config, historico: Historico = ()
-) -> AsyncIterator[str | Emocao | Espera | Consulta]:
+) -> AsyncIterator[str | Emocao | Espera | Consulta | Divergencia]:
     """Devolve a fala em pedaços de texto, à medida que o LLM gera.
 
     No modo de emoção "antes", a requisição oferece a ferramenta definir_emocao e o
@@ -248,7 +325,9 @@ async def gerar(
     Com ferramentas de rede ligadas (PEGASUS_FERRAMENTAS), elas também são oferecidas.
     Se o LLM chamar uma, sai Espera (o robô pode dizer "Deixa eu ver…"), a consulta é
     feita, sai a Consulta (para o registro) e a fala vem numa segunda requisição, sem
-    ferramentas: um texto de página não consegue disparar outra chamada.
+    ferramentas: um texto de página não consegue disparar outra chamada. Os resultados
+    da busca_web são conferidos ao mesmo tempo; se divergirem, sai Divergencia e o
+    robô diz que encontrou informações diferentes.
     Se a fala pergunta por algo recente (atualidade.pede_busca), a busca_web é
     obrigatória: o modelo não tem como responder de memória.
     `historico` são os turnos anteriores da sessão."""
@@ -290,8 +369,15 @@ async def gerar(
         # O que já foi dito antes da chamada ("Vou verificar.") volta ao modelo como
         # parte da mensagem dele, para a continuação não repetir nem contradizer.
         mensagens += _resultado_das_chamadas(chamadas, resultados, "".join(dito).strip())
-        async for pedaco in _depois_das_consultas(cliente, modelo, mensagens, config, consultas):
-            yield pedaco
+        conferencia = _conferir(texto_usuario, consultar, consultas, config)
+        try:
+            async for pedaco in _depois_das_consultas(
+                cliente, modelo, mensagens, config, consultas, conferencia
+            ):
+                yield pedaco
+        finally:
+            if conferencia is not None:
+                conferencia.cancel()
     elif chamadas and not falou:
         # O Qwen3.8 encerra o turno logo após a chamada: devolve o resultado e pede
         # a fala numa segunda requisição. Ela vai sem a lista de ferramentas, porque

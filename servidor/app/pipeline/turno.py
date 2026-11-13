@@ -11,7 +11,7 @@ from dataclasses import dataclass, field
 import numpy as np
 
 from app.config import Config
-from app.ferramentas import Consulta, Espera
+from app.ferramentas import Consulta, Divergencia, Espera
 from app.pipeline import llm, stt, tts
 from app.pipeline.emocao import Emocao, limpar_para_voz
 from app.pipeline.frases import cortar_frases
@@ -42,6 +42,7 @@ class Turno:
     reserva: bool = False  # o LLM não respondeu e o robô disse a fala de reserva
     despedida: bool = False  # a fala encerrou a conversa e o robô se despediu
     consultas: list[Consulta] = field(default_factory=list)  # ferramentas de rede usadas
+    divergencia: bool = False  # os resultados da busca discordavam; o robô não afirmou
     _inicio: float = field(default_factory=time.perf_counter, repr=False)
 
     def marcar(self, etapa: str) -> None:
@@ -88,6 +89,9 @@ async def _pedacos_medidos(
         if isinstance(pedaco, Consulta):
             turno.consultas.append(pedaco)
             turno.marcar("ferramenta_fim")
+            continue
+        if isinstance(pedaco, Divergencia):
+            turno.divergencia = True
             continue
         if isinstance(pedaco, Espera):
             turno.marcar("ferramenta_chamada")

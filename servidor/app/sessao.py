@@ -645,12 +645,15 @@ class Sessao:
         """Consultas do turno: nome, se deu certo, tempo e tamanho, nunca o texto."""
         if not turno.consultas:
             return {}
-        return {
-            "ferramentas": [
-                {"nome": c.nome, "ok": c.ok, "ms": c.ms, "caracteres": len(c.texto)}
-                for c in turno.consultas
-            ]
-        }
+        ferramentas = [
+            {"nome": c.nome, "ok": c.ok, "ms": c.ms, "caracteres": len(c.texto)}
+            for c in turno.consultas
+        ]
+        if turno.divergencia:
+            for f in ferramentas:
+                if f["nome"] == "busca_web":
+                    f["divergem"] = True
+        return {"ferramentas": ferramentas}
 
     def _registrar_falha(self, turno: Turno, duracao_s: float, erro: BaseException) -> None:
         dados = self._medidas(turno, duracao_s)

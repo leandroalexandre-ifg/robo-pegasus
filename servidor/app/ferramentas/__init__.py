@@ -40,6 +40,17 @@ class Espera:
 
 
 @dataclass(frozen=True)
+class Divergencia:
+    """Os resultados da busca discordam entre si: o robô diz FALA_DIVERGENTE e não
+    afirma nenhum deles."""
+
+
+FALA_DIVERGENTE = (
+    "Encontrei informações diferentes sobre isso na internet, então não posso afirmar."
+)
+
+
+@dataclass(frozen=True)
 class Consulta:
     """Uma ferramenta executada: o resultado vai ao LLM; o resto, só para o registro."""
 
