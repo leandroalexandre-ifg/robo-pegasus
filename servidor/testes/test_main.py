@@ -13,7 +13,8 @@ from app import sessao as sessao_mod
 from app.pipeline import llm, stt, tts
 from app.pipeline.emocao import Emocao
 
-TOKEN = "token-de-teste"
+TOKEN = "token-de-teste-AbCdEfGhIjKlMnOpQrStUvWxYz0123456789"
+OUTRO = "outro-tablet-ZyXwVuTsRqPoNmLkJiHgFeDcBa9876543210"
 TAXA = 22_050
 
 
@@ -44,7 +45,7 @@ def pipeline(monkeypatch, tmp_path):
     async def sintetizar(texto, config):
         return b"\x01\x00" * int(TAXA * 0.25), TAXA  # 250 ms → 3 blocos de até 100 ms
 
-    monkeypatch.setenv("PEGASUS_TOKENS", f"outro,{TOKEN}")
+    monkeypatch.setenv("PEGASUS_TABLETS", f"outro:{OUTRO},tablet-teste:{TOKEN}")
     monkeypatch.setenv("PEGASUS_LOG_PASTA", str(tmp_path))
     estado["llm_no_ar"] = True
 
@@ -224,7 +225,7 @@ def test_hello_recusado(cliente, primeira, codigo):
 
 
 def test_sem_tokens_configurados_recusa(monkeypatch, pipeline):
-    monkeypatch.setenv("PEGASUS_TOKENS", "")
+    monkeypatch.setenv("PEGASUS_TABLETS", "")
     with TestClient(main.app) as c, c.websocket_connect("/ws") as ws:
         ws.send_json(_hello())
         with pytest.raises(WebSocketDisconnect) as erro:
@@ -232,11 +233,15 @@ def test_sem_tokens_configurados_recusa(monkeypatch, pipeline):
     assert erro.value.code == 4001
 
 
-def test_token_valido():
-    assert main.token_valido("b", frozenset({"a", "b"}))
-    assert not main.token_valido("c", frozenset({"a", "b"}))
-    assert not main.token_valido(123, frozenset({"a"}))
-    assert not main.token_valido("a", frozenset())
+def test_o_tablet_e_quem_o_token_diz(cliente, pipeline):
+    with cliente.websocket_connect("/ws") as ws:
+        ws.send_json(_hello(token=OUTRO, device_id="tablet-teste"))  # device_id não conta
+        assert ws.receive_json()["type"] == "hello"
+        ws.receive_json()
+        _falar(ws)
+        _receber_ate_ocioso(ws)
+    [r] = _registros(pipeline)
+    assert r["tablet"] == "outro"
 
 
 def test_sem_emocao_do_llm_envia_neutro_antes_do_audio(cliente, pipeline):
@@ -764,6 +769,104 @@ def test_memoria_zerada_depois_do_prazo_sem_conversa(monkeypatch, pipeline):
         time.sleep(0.5)
         _turno(ws, "terceira", pipeline)
     assert [len(h) for h in pipeline["historicos"]] == [0, 1, 0]
+
+
+def _hello_errado(c, headers=None):
+    with c.websocket_connect("/ws", headers=dict(headers or {})) as ws:
+        ws.send_json(_hello(token="token-errado"))
+        with pytest.raises(WebSocketDisconnect) as fechou:
+            ws.receive_json()
+    assert fechou.value.code == 4001
+
+
+def test_ip_bloqueado_depois_de_5_hellos_invalidos(cliente, pipeline, caplog):
+    for _ in range(5):
+        _hello_errado(cliente)
+    with pytest.raises(WebSocketDisconnect):  # recusada antes do accept (HTTP 403)
+        with cliente.websocket_connect("/ws"):
+            pass
+    assert "IP testclient bloqueado por 15 min" in caplog.text
+    assert "conexão recusada de testclient: token inválido" in caplog.text
+    assert "token-errado" not in caplog.text
+
+
+def test_hello_que_nao_chega_conta_como_tentativa(cliente, pipeline, monkeypatch, caplog):
+    monkeypatch.setattr(main, "TEMPO_HELLO_S", 0.05)
+    for _ in range(5):
+        with cliente.websocket_connect("/ws") as ws:
+            with pytest.raises(WebSocketDisconnect) as fechou:
+                ws.receive_json()
+        assert fechou.value.code == 4008
+    with pytest.raises(WebSocketDisconnect):
+        with cliente.websocket_connect("/ws"):
+            pass
+    assert "hello não recebido em 5 s" in caplog.text
+
+
+def test_atras_do_proxy_bloqueia_o_ip_real(monkeypatch, pipeline):
+    monkeypatch.setenv("PEGASUS_PROXIES", "testclient")  # o TestClient faz o papel do Caddy
+    atacante = {"x-forwarded-for": "203.0.113.7"}
+    with TestClient(main.app) as c:
+        for _ in range(5):
+            _hello_errado(c, atacante)
+        with pytest.raises(WebSocketDisconnect):
+            with c.websocket_connect("/ws", headers=atacante):
+                pass
+        # outro tablet, pelo mesmo proxy, continua entrando
+        with c.websocket_connect("/ws", headers={"x-forwarded-for": "198.51.100.1"}) as ws:
+            _conectar(ws)
+
+
+def test_device_id_recusado_vai_limpo_para_o_log(cliente, pipeline, caplog):
+    with cliente.websocket_connect("/ws") as ws:
+        ws.send_json(_hello(token=TOKEN[:-1], device_id="sala\nsessão falsa"))
+        with pytest.raises(WebSocketDisconnect):
+            ws.receive_json()
+    assert "(device_id sala?sess?o?falsa)" in caplog.text
+    assert TOKEN[:-1] not in caplog.text
+
+
+def test_uma_sessao_por_token_a_nova_fecha_a_antiga(cliente, pipeline, caplog):
+    with cliente.websocket_connect("/ws") as antiga:
+        _conectar(antiga)
+        with cliente.websocket_connect("/ws") as nova:
+            _conectar(nova)
+            with pytest.raises(WebSocketDisconnect) as fechou:
+                antiga.receive_json()
+            assert fechou.value.code == 4009
+            _falar(nova)  # a nova segue funcionando
+            assert _tipos(_receber_ate_ocioso(nova))[:2] == ["pensando", "stt"]
+            resposta = cliente.get("/status").json()
+            assert resposta["sessoes"]["total"] == 1
+    assert "conectou de novo" in caplog.text
+
+
+def test_limite_de_sessoes_simultaneas(monkeypatch, pipeline):
+    terceiro = "terceiro-tablet-QwErTyUiOpAsDfGhJkLzXcVbNm1234567890"
+    monkeypatch.setenv("PEGASUS_TABLETS", f"outro:{OUTRO},tablet-teste:{TOKEN},terceiro:{terceiro}")
+    monkeypatch.setenv("PEGASUS_MAX_SESSOES", "2")
+    with TestClient(main.app) as c:
+        with c.websocket_connect("/ws") as a, c.websocket_connect("/ws") as b:
+            _conectar(a)
+            b.send_json(_hello(token=OUTRO))
+            b.receive_json(), b.receive_json()
+            with c.websocket_connect("/ws") as cheio:
+                cheio.send_json(_hello(token=terceiro))
+                with pytest.raises(WebSocketDisconnect) as fechou:
+                    cheio.receive_json()
+                assert fechou.value.code == 4013
+            # o mesmo tablet reconectando não conta como sessão a mais
+            with c.websocket_connect("/ws") as de_novo:
+                _conectar(de_novo)
+        with c.websocket_connect("/ws") as depois:  # com vaga, o terceiro entra
+            depois.send_json(_hello(token=terceiro))
+            assert depois.receive_json()["type"] == "hello"
+
+
+def test_status_recusa_pedido_que_veio_pelo_proxy(cliente):
+    assert cliente.get("/status").status_code == 200
+    assert cliente.get("/status", headers={"x-forwarded-for": "203.0.113.7"}).status_code == 404
+    assert cliente.get("/status", headers={"forwarded": "for=203.0.113.7"}).status_code == 404
 
 
 def _registros(pipeline):

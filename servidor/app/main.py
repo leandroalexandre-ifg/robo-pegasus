@@ -9,16 +9,16 @@ Uso, a partir de servidor/:
 import asyncio
 import collections
 import contextlib
-import hmac
 import json
 import logging
+import os
 import time
 from contextlib import asynccontextmanager
 
 import numpy as np
 from fastapi import FastAPI, HTTPException, Request, WebSocket
 
-from app import persona, registro, saude
+from app import persona, registro, saude, seguranca
 from app.config import Config, carregar_config, resumo_publico
 from app.pipeline import stt, tts, vad
 from app.sessao import Sessao
@@ -33,6 +33,9 @@ TEMPO_INATIVO_S = 45
 FECHA_PROTOCOLO = 4000
 FECHA_TOKEN = 4001
 FECHA_TEMPO = 4008
+FECHA_SUBSTITUIDA = 4009  # o mesmo tablet abriu outra conexão
+FECHA_CHEIO = 4013  # limite de sessões simultâneas
+FECHA_POLITICA = 1008  # IP bloqueado (antes do accept: o cliente recebe HTTP 403)
 
 
 async def preparar_modelos(config: Config) -> int:
@@ -58,8 +61,10 @@ async def lifespan(app: FastAPI):
     logging.getLogger("httpx").setLevel(logging.WARNING)
     config = carregar_config()
     arquivo_turnos = registro.configurar(config.log_pasta, config.log_dias)
-    if not config.tokens:
-        log.warning("PEGASUS_TOKENS vazio: todas as conexões serão recusadas.")
+    if not config.tablets:
+        log.warning("PEGASUS_TABLETS vazio: todas as conexões serão recusadas.")
+    if "PEGASUS_TOKENS" in os.environ:
+        log.warning("PEGASUS_TOKENS é ignorado: os tokens agora são por tablet (PEGASUS_TABLETS)")
     log.info("configuração: %s", json.dumps(resumo_publico(config), ensure_ascii=False))
     p = persona.carregar(config.persona_arquivo)
     log.info("turnos registrados em %s", arquivo_turnos)
@@ -67,8 +72,10 @@ async def lifespan(app: FastAPI):
     app.state.config = config
     app.state.taxa_saida = await preparar_modelos(config)
     log.info("modelos prontos; áudio de saída a %d Hz", app.state.taxa_saida)
+    app.state.bloqueio = seguranca.Bloqueio(config.proxies)
     sessoes: set[Sessao] = set()
     app.state.sessoes = sessoes
+    app.state.por_tablet = {}  # nome do tablet → sua sessão (uma por token)
     app.state.inicio = time.time()
 
     async def avisar(disponivel: bool) -> None:
@@ -96,7 +103,10 @@ _LOCAIS = {"127.0.0.1", "::1", "testclient"}
 async def status(request: Request) -> dict:
     """Estado da API para o pegasus-status. Só para quem está no próprio servidor;
     sem segredos, textos ou nomes de tablets."""
-    if request.client is None or request.client.host not in _LOCAIS:
+    # Atrás do Caddy, todo pedido da internet chega de 127.0.0.1: um pedido com
+    # cabeçalho de proxy não é local.
+    via_proxy = "x-forwarded-for" in request.headers or "forwarded" in request.headers
+    if request.client is None or request.client.host not in _LOCAIS or via_proxy:
         raise HTTPException(status_code=404)
     estado = request.app.state
     monitor: saude.MonitorLLM = estado.monitor
@@ -117,15 +127,8 @@ async def status(request: Request) -> dict:
     }
 
 
-def token_valido(token: object, tokens: frozenset[str]) -> bool:
-    if not isinstance(token, str):
-        return False
-    # Compara com todos, em tempo constante, para não vazar qual token quase bateu.
-    return any([hmac.compare_digest(token.encode(), t.encode()) for t in tokens])
-
-
-def _validar_hello(mensagem: dict, config: Config) -> tuple[int, str] | None:
-    """Devolve (código, motivo) para fechar a conexão, ou None se o hello é válido."""
+def _validar_hello(mensagem: dict, config: Config) -> tuple[int, str] | str:
+    """Devolve o nome do tablet, se o hello é válido, ou (código, motivo) para fechar."""
     if mensagem.get("type") != "hello":
         return FECHA_PROTOCOLO, "a primeira mensagem deve ser hello"
     if mensagem.get("version") != VERSAO_PROTOCOLO:
@@ -134,9 +137,10 @@ def _validar_hello(mensagem: dict, config: Config) -> tuple[int, str] | None:
     esperado = {"format": "pcm_s16le", "sample_rate": TAXA_ENTRADA, "channels": 1}
     if any(audio.get(k, v) != v for k, v in esperado.items()):
         return FECHA_PROTOCOLO, "formato de áudio não suportado"
-    if not token_valido(mensagem.get("token"), config.tokens):
+    tablet = seguranca.identificar(mensagem.get("token"), config.tablets)
+    if tablet is None:
         return FECHA_TOKEN, "token inválido"
-    return None
+    return tablet
 
 
 async def _receber_json(ws: WebSocket, tempo_s: float) -> dict | None:
@@ -152,45 +156,98 @@ async def _receber_json(ws: WebSocket, tempo_s: float) -> dict | None:
     return mensagem
 
 
+async def _recusar(ws: WebSocket, ip: str, codigo: int, motivo: str, hello: dict | None) -> None:
+    """Fecha a conexão com um hello inválido, registra a tentativa (sem o token) e
+    conta a falha para o bloqueio do IP."""
+    detalhe = ""
+    if hello is not None and "device_id" in hello:
+        detalhe = f" (device_id {seguranca.limpar_para_log(hello['device_id'])})"
+    log.warning("conexão recusada de %s: %s%s", ip, motivo, detalhe)
+    bloqueio: seguranca.Bloqueio = ws.app.state.bloqueio
+    if bloqueio.falhou(ip):
+        log.warning("IP %s bloqueado por 15 min: 5 hellos inválidos em 10 min", ip)
+    with contextlib.suppress(Exception):
+        await ws.close(codigo, motivo)
+
+
 @app.websocket("/ws")
 async def conexao(ws: WebSocket) -> None:
-    await ws.accept()
     config: Config = ws.app.state.config
+    direto = ws.client.host if ws.client else None
+    ip = seguranca.ip_real(direto, ws.headers.get("x-forwarded-for"), config.proxies)
+    bloqueio: seguranca.Bloqueio = ws.app.state.bloqueio
+    if bloqueio.bloqueado(ip):
+        n = bloqueio.recusadas(ip)
+        if n == 1 or n % 100 == 0:  # sem inundar o log durante um ataque
+            log.warning("conexão recusada de %s: IP bloqueado (%d recusadas no bloqueio)", ip, n)
+        await ws.close(FECHA_POLITICA)
+        return
+    await ws.accept()
 
+    hello = None
     try:
         hello = await _receber_json(ws, TEMPO_HELLO_S)
     except TimeoutError:
-        await ws.close(FECHA_TEMPO, "hello não recebido")
+        await _recusar(ws, ip, FECHA_TEMPO, "hello não recebido em 5 s", None)
         return
     except ValueError:
-        await ws.close(FECHA_PROTOCOLO, "hello inválido")
+        await _recusar(ws, ip, FECHA_PROTOCOLO, "hello inválido", None)
         return
     if hello is None:
         return
-    if falha := _validar_hello(hello, config):
-        log.warning("conexão recusada: %s", falha[1])
-        await ws.close(*falha)
+    tablet = _validar_hello(hello, config)
+    if isinstance(tablet, tuple):
+        await _recusar(ws, ip, *tablet, hello)
         return
 
+    # O tablet é quem o token diz; o device_id do hello não identifica ninguém.
+    sessoes: set[Sessao] = ws.app.state.sessoes
+    por_tablet: dict[str, Sessao] = ws.app.state.por_tablet
+    antiga = por_tablet.get(tablet)
+    if antiga is None and len(sessoes) >= config.max_sessoes:
+        log.warning(
+            "conexão recusada de %s: limite de %d sessões (tablet %s)",
+            ip,
+            config.max_sessoes,
+            tablet,
+        )
+        await ws.close(FECHA_CHEIO, "limite de sessões simultâneas")
+        return
     monitor: saude.MonitorLLM = ws.app.state.monitor
-    sessao = Sessao(ws, config, str(hello.get("device_id") or "sem-id")[:64], monitor)
-    log.info("sessão %s: tablet %s conectado", sessao.id, sessao.device_id)
-    await sessao.enviar_json(
-        {
-            "type": "hello",
-            "version": VERSAO_PROTOCOLO,
-            "session_id": sessao.id,
-            "audio": {"format": "pcm_s16le", "sample_rate": ws.app.state.taxa_saida, "channels": 1},
-            "activation": config.ativacao,
-        }
-    )
-    await sessao.mudar_estado(sessao.estado_livre())
-    ws.app.state.sessoes.add(sessao)
-
+    sessao = Sessao(ws, config, tablet, monitor)
+    # Registra já, sem await no meio: duas conexões ao mesmo tempo não passam juntas
+    # pelas verificações acima.
+    por_tablet[tablet] = sessao
+    sessoes.add(sessao)
     try:
+        if antiga is not None:
+            # Uma conexão nova vence a antiga: depois de uma queda de rede, a antiga
+            # pode ficar pendurada até o limite de inatividade e travaria a reconexão.
+            log.warning(
+                "tablet %s conectou de novo de %s; fechando a sessão %s", tablet, ip, antiga.id
+            )
+            sessoes.discard(antiga)
+            await antiga.substituir(FECHA_SUBSTITUIDA, "o tablet abriu outra conexão")
+        log.info("sessão %s: tablet %s conectado de %s", sessao.id, sessao.device_id, ip)
+        await sessao.enviar_json(
+            {
+                "type": "hello",
+                "version": VERSAO_PROTOCOLO,
+                "session_id": sessao.id,
+                "audio": {
+                    "format": "pcm_s16le",
+                    "sample_rate": ws.app.state.taxa_saida,
+                    "channels": 1,
+                },
+                "activation": config.ativacao,
+            }
+        )
+        await sessao.mudar_estado(sessao.estado_livre())
         await _atender(ws, sessao)
     finally:
-        ws.app.state.sessoes.discard(sessao)
+        sessoes.discard(sessao)
+        if por_tablet.get(tablet) is sessao:
+            del por_tablet[tablet]
         with contextlib.suppress(Exception):
             await sessao.encerrar()
         log.info("sessão %s: desconectada", sessao.id)
@@ -238,4 +295,11 @@ if __name__ == "__main__":
     import uvicorn
 
     config = carregar_config()
-    uvicorn.run("app.main:app", host=config.api_host, port=config.api_porta, ws="websockets-sansio")
+    # proxy_headers=False: o IP real é decidido aqui (seguranca.ip_real), não pelo uvicorn.
+    uvicorn.run(
+        "app.main:app",
+        host=config.api_host,
+        port=config.api_porta,
+        ws="websockets-sansio",
+        proxy_headers=False,
+    )

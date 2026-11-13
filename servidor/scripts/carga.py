@@ -36,6 +36,7 @@ from pathlib import Path
 from websockets.asyncio.client import connect
 
 from app.wav import ler_wav
+from scripts import tokens
 
 QUADRO = 640  # 20 ms de PCM 16 kHz, 16 bits
 QUADRO_S = 0.02
@@ -272,7 +273,13 @@ def carregar_falas(pasta: Path) -> dict[str, list[bytes]]:
 
 
 async def principal(args) -> dict:
-    token = os.environ.get("PEGASUS_TOKEN") or os.environ.get("PEGASUS_TOKENS", "").split(",")[0]
+    # Um token por cliente: o servidor aceita uma sessão por tablet.
+    disponiveis = tokens.de_teste()
+    if len(disponiveis) < args.clientes:
+        sys.exit(
+            f"Faltam tokens: {args.clientes} clientes, {len(disponiveis)} tablets teste-* "
+            "(crie com python -m scripts.tokens adicionar teste-N --sem-mostrar)."
+        )
     falas = carregar_falas(args.falas)
     inicio = time.time()
     ate = inicio + args.minutos * 60
@@ -280,7 +287,7 @@ async def principal(args) -> dict:
     gpu: list[dict] = []
     await asyncio.gather(
         amostrar_gpu(args.gpu, ate, gpu),
-        *(cliente(n, args.url, token.strip(), falas, ate, eventos) for n in range(args.clientes)),
+        *(cliente(n, args.url, disponiveis[n], falas, ate, eventos) for n in range(args.clientes)),
     )
     resumo = resumir(eventos, gpu, time.time() - inicio)
     args.saida.write_text(

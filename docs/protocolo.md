@@ -7,10 +7,19 @@ Este documento é a fonte da verdade do protocolo. Ao mudar o protocolo, atualiz
 ## Conexão
 
 - WebSocket em `/ws`. O servidor escuta em `127.0.0.1:8100` (`PEGASUS_HOST` e `PEGASUS_PORTA_API`). O tablet chega a ele por túnel SSH, porta liberada ou VPN.
-- Uma conexão por tablet. Na mesma conexão trafegam:
+- Uma conexão por tablet (por token). Se o mesmo tablet abre outra conexão, a nova vence e a antiga é fechada com 4009: depois de uma queda de rede, a conexão antiga pode ficar pendurada até o limite de inatividade, e recusar a nova travaria a reconexão. O app não deve reconectar sozinho depois de um 4009, senão dois aparelhos com o mesmo token ficariam se derrubando.
+- No máximo `PEGASUS_MAX_SESSOES` (padrão 4) tablets ao mesmo tempo; acima disso, a nova conexão é fechada com 4013 logo depois do `hello` válido.
+- Na mesma conexão trafegam:
   - **quadros de texto**: controle, em JSON, sempre com o campo `type`;
   - **quadros binários**: áudio PCM, sem cabeçalho.
 - Campos desconhecidos devem ser ignorados, para permitir evolução sem quebrar o outro lado.
+
+### Proteção contra abuso
+
+- **`hello` obrigatório em até 5 s:** sem ele, o servidor fecha com 4008.
+- **Bloqueio de IP:** 5 `hello` inválidos (token errado, mensagem malformada, versão ou áudio não suportados, ou `hello` que não chega em 5 s) do mesmo IP em 10 min bloqueiam esse IP por 15 min. Durante o bloqueio, o servidor recusa a conexão antes de aceitá-la: o cliente recebe HTTP 403 no handshake.
+- **IP real:** atrás do Caddy, o servidor usa o `X-Forwarded-For`, mas só quando a conexão vem de um proxy confiável (`PEGASUS_PROXIES`, padrão `127.0.0.1,::1`). Ele vale a partir da direita, a entrada acrescentada pelo proxy; o que o cliente escreve à esquerda é ignorado. O IP de um proxy nunca é bloqueado: atrás do Caddy, isso derrubaria todos os tablets.
+- **Registro:** cada conexão recusada vai para o log com o IP, o motivo e o `device_id` (limpo, até 32 caracteres), nunca com o token. Durante um bloqueio, o log registra a primeira recusa e depois uma a cada 100.
 
 ## Sessão e memória
 
@@ -133,8 +142,8 @@ Primeira mensagem da conexão, obrigatória em até 5 s.
 }
 ```
 
-- `token`: um dos valores de `PEGASUS_TOKENS` no `pegasus.env` do servidor (separados por vírgula).
-- `device_id`: identificação livre do tablet, usada nos registros.
+- `token`: o token deste tablet. Cada tablet tem o seu, em `PEGASUS_TABLETS` no `pegasus.env` do servidor (`nome:token,nome:token`). O token é aleatório, com pelo menos 32 caracteres de base64 para URL; o servidor não sobe com um token curto ou repetido. Para gerar: `python -m scripts.tokens adicionar NOME`. A comparação é feita em tempo constante.
+- `device_id`: informativo. O servidor identifica o tablet pelo token, e é esse nome que aparece nos registros.
 - `audio`: formato que o tablet vai enviar; na versão 1 só `pcm_s16le`, 16 kHz, mono.
 
 ### `listen_start`
@@ -307,5 +316,8 @@ A conexão continua aberta, com `ping`/`pong`. Com o vLLM fora, o servidor o ver
 | 4000 | Erro de protocolo (JSON inválido, `hello` ausente ou fora de ordem, versão ou formato de áudio não suportado) |
 | 4001 | Token inválido |
 | 4008 | Tempo esgotado (sem `hello` em 5 s ou sem mensagens por 45 s) |
+| 4009 | O mesmo tablet abriu outra conexão (não reconectar sozinho) |
+| 4013 | Limite de sessões simultâneas atingido (reconectar com espera crescente) |
+| HTTP 403 | IP bloqueado por `hello` inválidos repetidos (a conexão nem chega a abrir) |
 
 Ao perder a conexão, o app mostra `desconectado` e tenta reconectar com espera crescente.

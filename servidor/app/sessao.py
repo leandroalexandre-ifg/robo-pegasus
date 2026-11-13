@@ -422,6 +422,15 @@ class Sessao:
             self._frase_aberta = False
             await self.enviar_json({"type": "tts_end"})
 
+    async def substituir(self, codigo: int, motivo: str) -> None:
+        """O mesmo tablet abriu outra conexão: interrompe o turno e fecha esta."""
+        with contextlib.suppress(Exception):
+            await self.cancelar_turno()
+        with contextlib.suppress(Exception):
+            async with asyncio.timeout(2):
+                async with self._envio:
+                    await self.ws.close(codigo, motivo)
+
     async def encerrar(self) -> None:
         """Fim da conexão: interrompe o turno e descarta a memória da conversa."""
         try:
