@@ -1,6 +1,6 @@
 """Mede, de ponta a ponta, os turnos com e sem ferramentas de internet.
 
-Sintetiza cada pergunta com o Piper ("Pegasus, <pergunta>"), reamostra para 16 kHz e
+Sintetiza cada pergunta com o Piper ("Ei, Pegasus, <pergunta>"), reamostra para 16 kHz e
 a envia em tempo real pela escuta contínua (modo palavra), uma conexão por pergunta
 (sem memória entre elas). Mede, do fim da fala:
   - primeiro áudio: o primeiro som (pode ser o "Deixa eu ver…");
@@ -180,7 +180,10 @@ async def principal(args) -> dict:
     for rodada in range(args.rodadas):
         for grupo, perguntas in grupos.items():
             for pergunta in perguntas:
-                pcm = await sintetizar(f"Pegasus, {pergunta}", config)
+                # Com o nome no começo da síntese, o Piper enfraquece o "Pe" e o Whisper
+                # ouve "Gazus", "Eidasus" (~1 em 4 falas em algumas perguntas). Com o
+                # "Ei," na frente, quase nunca; o que se mede aqui é a latência.
+                pcm = await sintetizar(f"Ei, Pegasus, {pergunta}", config)
                 r = await um_turno(url, token, pcm)
                 r |= {"grupo": grupo, "pergunta": pergunta, "rodada": rodada}
                 turnos.append(r)
