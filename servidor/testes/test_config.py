@@ -86,7 +86,7 @@ def test_resumo_publico_sem_segredos():
         "ferramentas": "nenhuma",
         "fuso": "America/Sao_Paulo",
         "cidade": "Goiânia",
-        "vad_silencio_ms": 600,
+        "vad_silencio_ms": 750,
         "vad_previa_ms": 300,
         "memoria_turnos": 6,
         "memoria_s": 180.0,
