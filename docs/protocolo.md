@@ -14,7 +14,7 @@ Este documento é a fonte da verdade do protocolo. Ao mudar o protocolo, atualiz
 
 ## Sessão e memória
 
-Cada conexão é uma sessão. O servidor guarda uma memória curta da conversa da sessão: os últimos `PEGASUS_MEMORIA_TURNOS` turnos (padrão 6), cada um com a fala do usuário e o que o robô respondeu, e os envia ao LLM a cada turno. Uma resposta interrompida entra na memória só com as frases que chegaram a ser sintetizadas; um turno sem resposta (sem fala reconhecida, erro, `abort` antes da primeira frase) não entra.
+Cada conexão é uma sessão. O servidor guarda uma memória curta da conversa da sessão: os últimos `PEGASUS_MEMORIA_TURNOS` turnos (padrão 6), cada um com a fala do usuário e o que o robô respondeu, e os envia ao LLM a cada turno. Uma resposta interrompida entra na memória só com as frases que chegaram a ser sintetizadas; um turno sem resposta (sem fala reconhecida, erro, `abort` antes da primeira frase) não entra. A memória é zerada quando a conexão cai, numa despedida do modo `palavra` (ver "Conversa") e depois de `PEGASUS_MEMORIA_S` (padrão 180 s; 0 desliga) sem conversa, contados do fim do último turno: quem chegar depois começa do zero.
 
 A memória fica só na memória do processo e é descartada quando a conexão fecha. Ao reconectar, o tablet começa uma conversa nova.
 
@@ -79,7 +79,7 @@ Depois de cada resposta (e do "Oi?"), o servidor não volta a esperar o nome: el
 - **Prazo:** `PEGASUS_CONVERSA_S` (padrão 8 s; 0 desliga a conversa) sem fala, contado no áudio que chega do tablet, isto é, a partir do momento em que ele termina de tocar a resposta e reabre o microfone. Depois do "Oi?", o prazo é `PEGASUS_VAD_SEM_FALA_MS`.
 - **Renovação:** cada nova resposta envia outro `conversation "conversando"` e recomeça o prazo.
 - **Fim por silêncio:** sem fala no prazo, o servidor envia `conversation "esperando_nome"` e `state "ocioso"`; daí em diante, só "Pegasus" abre a escuta de novo.
-- **Despedida:** se a fala inteira for uma despedida ("tchau, Pegasus", "obrigado, é só isso", "até logo", "pode descansar"), o servidor não chama o LLM: envia `stt`, responde "Tchau! Até a próxima." (`state "falando"`, uma frase, sem `emotion`) e termina com `conversation "esperando_nome"` e `state "ocioso"`. Palavras de cortesia e o nome em volta não mudam isso ("ok, obrigado, tchau"). Já "Obrigado." sozinho ou "Tchau, mas antes me diz uma coisa" são perguntas normais. A despedida não entra na memória. "Pegasus, tchau" vindo de `ocioso` também é despedida.
+- **Despedida:** se a fala inteira for uma despedida ("tchau, Pegasus", "obrigado, é só isso", "até logo", "pode descansar"), o servidor não chama o LLM: envia `stt`, responde "Tchau! Até a próxima." (`state "falando"`, uma frase, sem `emotion`) e termina com `conversation "esperando_nome"` e `state "ocioso"`. Palavras de cortesia e o nome em volta não mudam isso ("ok, obrigado, tchau"). Já "Obrigado." sozinho ou "Tchau, mas antes me diz uma coisa" são perguntas normais. A despedida zera a memória da sessão. "Pegasus, tchau" vindo de `ocioso` também é despedida.
 - **Outros fins:** `abort`, `error`, a queda do LLM (`state "desconectado"`) ou uma fala sem texto reconhecido (`stt` vazio) também encerram a conversa, com `conversation "esperando_nome"` antes do `state`.
 
 No modo `toque` não há conversa: a mensagem `conversation` nunca é enviada, e "tchau" vai ao LLM como qualquer pergunta.

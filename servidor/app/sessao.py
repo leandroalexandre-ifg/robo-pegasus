@@ -117,6 +117,8 @@ class Sessao:
         # resposta). O prazo sem fala da escuta atual fica em `_sem_fala_s`.
         self._conversando = False
         self._sem_fala_s = config.vad_sem_fala_s
+        # Zera a memória depois de PEGASUS_MEMORIA_S sem conversa (do fim do último turno).
+        self._esquecimento: asyncio.TimerHandle | None = None
         # Memória curta: (fala do usuário, resposta) dos últimos turnos desta conexão.
         self.historico: collections.deque[tuple[str, str]] = collections.deque(
             maxlen=config.memoria_turnos
@@ -425,7 +427,27 @@ class Sessao:
         try:
             await self.cancelar_turno()
         finally:
+            self._cancelar_esquecimento()
             self.historico.clear()
+
+    def esquecer(self, motivo: str) -> None:
+        """Zera a memória da conversa (outra pessoa pode chegar depois)."""
+        self._cancelar_esquecimento()
+        if self.historico:
+            self.historico.clear()
+            log.info("sessão %s: memória zerada (%s)", self.id, motivo)
+
+    def _cancelar_esquecimento(self) -> None:
+        if self._esquecimento is not None:
+            self._esquecimento.cancel()
+            self._esquecimento = None
+
+    def _agendar_esquecimento(self) -> None:
+        self._cancelar_esquecimento()
+        if self.config.memoria_s > 0 and self.historico:
+            self._esquecimento = asyncio.get_running_loop().call_later(
+                self.config.memoria_s, self.esquecer, "tempo sem conversa"
+            )
 
     def _lembrar(self, turno: Turno) -> None:
         # Guarda o que o robô chegou a dizer, mesmo se o turno foi interrompido.
@@ -442,6 +464,7 @@ class Sessao:
         """Responde à fala. Com `texto`, ela já foi transcrita (palavra de ativação).
         Com `portao`, o turno começou antes do fim da fala: transcreve e gera, mas só
         envia algo (inclusive erros) depois de passar por ele."""
+        self._cancelar_esquecimento()  # o prazo recomeça no fim deste turno
         memoria = tuple(self.historico)
         turno.memoria = len(memoria)
         duracao_s = len(pcm) / 2 / TAXA_ENTRADA
@@ -469,6 +492,8 @@ class Sessao:
             self._lembrar(turno)
             tipo = "despedida" if turno.despedida else "turno" if turno.frases else "sem_fala"
             registro.registrar(tipo, **self._medidas(turno, duracao_s))
+        finally:
+            self._agendar_esquecimento()
 
     async def _depois_da_resposta(self, turno: Turno) -> None:
         """No modo palavra, cada resposta abre (ou renova) a conversa; uma despedida
@@ -487,6 +512,7 @@ class Sessao:
     async def _despedir(self, turno: Turno) -> AsyncIterator[BlocoAudio]:
         """Resposta fixa a uma despedida, sem o LLM e sem emoção."""
         turno.despedida = True
+        self.esquecer("despedida")
         pcm, taxa = await asyncio.wait_for(
             tts.sintetizar(DESPEDIDA, self.config), self.config.tts_limite_s
         )

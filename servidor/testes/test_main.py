@@ -742,6 +742,30 @@ def test_modo_toque_nao_abre_conversa(cliente, pipeline):
     assert len(pipeline["historicos"]) == 1  # no toque, "tchau" vai ao LLM
 
 
+def test_despedida_zera_a_memoria(escuta_continua, pipeline):
+    pipeline["falas"] += ["Pegasus, qual é o seu nome?", "Tchau, Pegasus.", "Pegasus, oi"]
+    with escuta_continua.websocket_connect("/ws") as ws:
+        _conectar_continuo(ws)
+        _enviar_audio(ws, 3.0)
+        _receber_ate_estado(ws, "ouvindo")
+        _enviar_audio(ws, 3.0)
+        _receber_ate_ocioso(ws)  # despedida
+        _enviar_audio(ws, 3.0)
+        _receber_ate_estado(ws, "ouvindo")
+    assert pipeline["historicos"] == [[], []]  # o segundo pedido ao LLM vai sem memória
+
+
+def test_memoria_zerada_depois_do_prazo_sem_conversa(monkeypatch, pipeline):
+    monkeypatch.setenv("PEGASUS_MEMORIA_S", "0.3")
+    with TestClient(main.app) as c, c.websocket_connect("/ws") as ws:
+        _conectar(ws)
+        _turno(ws, "primeira", pipeline)
+        _turno(ws, "segunda", pipeline)  # dentro do prazo: lembra a primeira
+        time.sleep(0.5)
+        _turno(ws, "terceira", pipeline)
+    assert [len(h) for h in pipeline["historicos"]] == [0, 1, 0]
+
+
 def _registros(pipeline):
     linhas = pipeline["turnos"].read_text().splitlines()
     return [json.loads(linha) for linha in linhas]
