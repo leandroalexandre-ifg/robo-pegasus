@@ -101,3 +101,16 @@ Teste com um proxy TCP na frente do vLLM, com uma instância de teste: matar o p
 
 - `~/.local/state/robo-pegasus/turnos.jsonl` (`PEGASUS_LOG_PASTA`): uma linha JSON por turno, só com tempos, contagens e identificadores. Troca de arquivo à meia-noite e guarda 30 dias (`PEGASUS_LOG_DIAS`). O log geral (journald) também deixou de gravar texto da conversa, argumentos da ferramenta e a duração das falas descartadas.
 - `pegasus-status` (`servidor/scripts/pegasus-status`, com link em `~/.local/bin`): serviços, vLLM, API (via `/status`, só local), GPU1 e turnos do dia. Sai com 1 se o vLLM ou a API não respondem.
+
+## Conversa no modo palavra (2026-11-13)
+
+Depois de cada resposta, a escuta fica aberta por `PEGASUS_CONVERSA_S` (8 s) sem o nome; despedidas encerram na hora (ver "Conversa" em `protocolo.md`). Validação com 3 clientes por 4 minutos, que depois de cada resposta fazem uma pergunta seguinte, se despedem ou ficam calados: 99 falas, todas com o resultado esperado.
+
+| Fala | Total | Resultado | Mediana (cliente) |
+| --- | --- | --- | --- |
+| "Pegasus, pergunta" | 20 | 20 respostas | 512 ms |
+| Pergunta seguinte, sem o nome | 20 | 20 respostas | 510 ms |
+| Só "Pegasus." | 11 | 11 "Oi?" | 356 ms |
+| Fala sem a palavra, fora da conversa | 17 | 17 descartadas | — |
+| Despedida ("Tchau, Pegasus.") | 12 | 12 despedidas, sem LLM | 322 ms |
+| Silêncio na conversa | 19 | 19 voltas a esperar o nome | 7986 ms depois de a resposta tocar |
