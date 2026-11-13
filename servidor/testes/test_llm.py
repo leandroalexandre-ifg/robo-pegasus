@@ -211,11 +211,13 @@ def test_cliente_sem_novas_tentativas_e_com_limite(monkeypatch):
 # Ferramentas de rede
 
 
-def _gerar_com(ferramentas="clima,wikipedia,busca_web", modo="paralelo"):
+def _gerar_com(
+    ferramentas="clima,wikipedia,busca_web", modo="paralelo", fala="Quem foi Santos Dumont?"
+):
     config = carregar_config({"PEGASUS_EMOCAO_MODO": modo, "PEGASUS_FERRAMENTAS": ferramentas})
 
     async def coletar():
-        return [x async for x in llm.gerar("Quem foi Santos Dumont?", config)]
+        return [x async for x in llm.gerar(fala, config)]
 
     return asyncio.run(coletar())
 
@@ -351,3 +353,32 @@ def test_texto_antes_da_chamada_de_rede_volta_ao_modelo(cliente, consultas):
     ]
     chamada = pedidos[1]["messages"][-3]
     assert chamada["content"] == "Vou verificar." and chamada["tool_calls"]
+
+
+def test_pergunta_recente_obriga_a_busca(cliente, consultas):
+    respostas, pedidos = cliente
+    consultas[1].append([_consulta("busca_web", fonte="uma busca na internet")])
+    respostas.append(_Fluxo([_chamada("busca_web", '{"consulta": "presidente da França"}')]))
+    respostas.append(_Fluxo([_texto(" é Fulano.")]))
+    _gerar_com(fala="Quem é o atual presidente da França?")
+    assert pedidos[0]["tool_choice"] == {"type": "function", "function": {"name": "busca_web"}}
+    assert [t["function"]["name"] for t in pedidos[0]["tools"]] == [
+        "clima",
+        "wikipedia",
+        "busca_web",
+    ]
+    assert "tools" not in pedidos[1]
+
+
+def test_pergunta_sem_termo_de_atualidade_deixa_a_escolha(cliente):
+    respostas, pedidos = cliente
+    respostas.append(_Fluxo([_texto("Oi!")]))
+    _gerar_com(fala="Me conta uma piada.")
+    assert pedidos[0]["tool_choice"] == "auto"
+
+
+def test_sem_busca_ligada_nao_obriga(cliente):
+    respostas, pedidos = cliente
+    respostas.append(_Fluxo([_texto("Oi!")]))
+    _gerar_com("clima,wikipedia", fala="Quem é o atual presidente da França?")
+    assert pedidos[0]["tool_choice"] == "auto"

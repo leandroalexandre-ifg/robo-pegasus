@@ -11,7 +11,7 @@ from openai import AsyncOpenAI
 from app import ferramentas as ferramentas_rede
 from app import persona
 from app.config import Config
-from app.ferramentas import Consulta, Espera
+from app.ferramentas import Consulta, Espera, atualidade
 from app.ferramentas.agora import agora
 from app.pipeline.emocao import FERRAMENTA, Emocao, cortar_marcacoes, emocao_da_chamada
 
@@ -83,12 +83,19 @@ async def _fluxo(
     chamadas: dict[int, dict] | None = None,
     oferecidas: Sequence[dict] = (),
     continuar: bool = False,
+    obrigatoria: str | None = None,
 ) -> AsyncIterator[str | Espera]:
     """Uma requisição em fluxo: devolve o texto e acumula em `chamadas` as chamadas
     das ferramentas `oferecidas`. Ao começar uma chamada de ferramenta de rede, devolve
     Espera (antes dos argumentos). Com `continuar`, a última mensagem (do assistente)
-    é continuada em vez de começar uma resposta nova."""
-    ferramentas = {"tools": list(oferecidas), "tool_choice": "auto"} if oferecidas else {}
+    é continuada em vez de começar uma resposta nova. Com `obrigatoria`, o modelo tem
+    de chamar essa ferramenta (tool_choice nomeado) e não diz nada antes."""
+    ferramentas = {}
+    if oferecidas:
+        escolha = "auto"
+        if obrigatoria:
+            escolha = {"type": "function", "function": {"name": obrigatoria}}
+        ferramentas = {"tools": list(oferecidas), "tool_choice": escolha}
     extra = _SEM_RACIOCINIO
     if continuar:
         extra = extra | {"continue_final_message": True, "add_generation_prompt": False}
@@ -242,6 +249,8 @@ async def gerar(
     Se o LLM chamar uma, sai Espera (o robô pode dizer "Deixa eu ver…"), a consulta é
     feita, sai a Consulta (para o registro) e a fala vem numa segunda requisição, sem
     ferramentas: um texto de página não consegue disparar outra chamada.
+    Se a fala pergunta por algo recente (atualidade.pede_busca), a busca_web é
+    obrigatória: o modelo não tem como responder de memória.
     `historico` são os turnos anteriores da sessão."""
     cliente, modelo = await _preparar(config)
     rede = ferramentas_rede.ativas_de_rede(config)
@@ -252,10 +261,14 @@ async def gerar(
             yield pedaco
         return
 
+    obrigatoria = None
+    if "busca_web" in rede and atualidade.pede_busca(texto_usuario):
+        obrigatoria = "busca_web"
+        log.info("pergunta sobre fato recente: busca_web obrigatória")
     chamadas: dict[int, dict] = {}
     dito: list[str] = []
     async for pedaco in _texto_limpo(
-        _fluxo(cliente, modelo, mensagens, config, chamadas, oferecidas)
+        _fluxo(cliente, modelo, mensagens, config, chamadas, oferecidas, obrigatoria=obrigatoria)
     ):
         if isinstance(pedaco, str):
             dito.append(pedaco)
