@@ -55,3 +55,26 @@ def test_ignora_pedacos_sem_texto():
 def test_itens_que_nao_sao_texto_passam_na_hora():
     evento = object()
     assert _cortar(["Olá, tudo ", evento, "bem? Sim."]) == [evento, "Olá, tudo bem?", "Sim."]
+
+
+def _cortar_na_virgula(pedacos):
+    async def coletar():
+        return [f async for f in cortar_frases(_fluxo(pedacos), primeira_na_virgula=True)]
+
+    return asyncio.run(coletar())
+
+
+def test_primeira_frase_termina_na_primeira_virgula():
+    assert _cortar_na_virgula(["Olha, o sol ", "é uma estrela, e fica longe. Mais, nada."]) == [
+        "Olha,",
+        "o sol é uma estrela, e fica longe.",
+        "Mais, nada.",
+    ]
+
+
+def test_virgula_de_numero_nao_corta_a_primeira_frase():
+    assert _cortar_na_virgula(["São 3,5 metros. Fim."]) == ["São 3,5 metros.", "Fim."]
+
+
+def test_primeira_frase_sem_virgula_corta_na_pontuacao():
+    assert _cortar_na_virgula(["Oi! Tudo bem, e você?"]) == ["Oi!", "Tudo bem, e você?"]

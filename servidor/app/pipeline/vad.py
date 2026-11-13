@@ -83,6 +83,11 @@ class DetectorFala:
         return self.inicio is not None
 
     @property
+    def fala_s(self) -> float:
+        """Tempo desde o início da fala até a última amostra avaliada."""
+        return 0.0 if self.inicio is None else (self._amostras - self.inicio) / TAXA_ENTRADA
+
+    @property
     def silencio_s(self) -> float:
         """Silêncio desde o fim da fala até a última amostra avaliada."""
         return 0.0 if self.fim is None else (self._amostras - self.fim) / TAXA_ENTRADA

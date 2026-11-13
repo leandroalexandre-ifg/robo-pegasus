@@ -77,3 +77,8 @@ def test_silero_de_verdade_nao_ve_fala_no_silencio():
     for quadro in _pcm(50):
         assert detector.processar(quadro) is None
     assert not detector.falou
+
+
+def test_duracao_da_fala_conta_desde_o_inicio():
+    detector, _ = _rodar([0.0] * 5 + [0.9] * 20)
+    assert detector.fala_s == pytest.approx(20 * BLOCO / 16_000)

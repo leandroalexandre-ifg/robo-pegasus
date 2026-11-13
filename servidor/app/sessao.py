@@ -7,16 +7,20 @@ import json
 import logging
 import secrets
 import time
+from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
 
 import numpy as np
 import openai
 from fastapi import WebSocket
 
+from app import registro
 from app.config import Config
 from app.pipeline import ativacao, stt, tts
 from app.pipeline.emocao import Emocao
 from app.pipeline.turno import Turno, falar, transcrever
 from app.pipeline.vad import DetectorFala
+from app.saude import MonitorLLM
 from app.wav import TAXA_ENTRADA
 
 log = logging.getLogger("pegasus.sessao")
@@ -27,6 +31,8 @@ BLOCO_SAIDA_S = 0.1
 # Quanto o abort espera a limpeza do turno cancelado (fechar o fluxo do LLM etc.)
 # antes de seguir sem ela.
 ESPERA_CANCELAMENTO_S = 0.5
+# Um tablet que não lê o que o servidor envia (rede travada) não segura o turno.
+ENVIO_LIMITE_S = 10
 # Margens mantidas em volta da fala detectada, para o Whisper não perder sílabas.
 PRE_FALA_S = 0.3
 POS_FALA_S = 0.2
@@ -35,14 +41,60 @@ POS_FALA_S = 0.2
 VIGIA_GUARDA_S = 1.0
 _VIGIA_LIMITE_BYTES = round(2 * VIGIA_GUARDA_S * TAXA_ENTRADA) * 2
 SAUDACAO = "Oi?"  # resposta a uma fala que é só a palavra de ativação
+# Uma fala da escuta contínua mais longa que isso não é um chamado (ruído ou conversa
+# da sala) e é descartada sem transcrever: o Whisper fica lento e inventa texto com
+# ruído longo.
+MAX_FALA_PALAVRA_S = 10
 
 
 def _amostras(pcm: bytes) -> np.ndarray:
     return np.frombuffer(pcm, dtype=np.int16).astype(np.float32) / 32768.0
 
 
+class _Portao:
+    """Segura o envio de um turno começado antes da hora (prévia) até a decisão.
+
+    `abrir` espera o fim da fala e diz se o turno ainda vale; roda uma vez só."""
+
+    def __init__(self, abrir: Callable[[], Awaitable[bool]]):
+        self._abrir = abrir
+        self.aberto: bool | None = None
+
+    async def passar(self) -> bool:
+        if self.aberto is None:
+            self.aberto = await self._abrir()
+        return self.aberto
+
+
+def _esperar(liberar: asyncio.Event) -> Callable[[], Awaitable[bool]]:
+    async def abrir() -> bool:
+        await liberar.wait()
+        return True
+
+    return abrir
+
+
+async def _passou(portao: _Portao | None) -> bool:
+    return portao is None or await portao.passar()
+
+
+@dataclass
+class _Previa:
+    """Turno começado com PEGASUS_VAD_PREVIA_MS de silêncio: transcreve e gera, mas
+    só envia quando o VAD confirmar o fim da fala. Vale para a fala cujo silêncio
+    começou na amostra `fim`; se a pessoa voltar a falar, é cancelado."""
+
+    fim: int
+    turno: Turno
+    liberar: asyncio.Event
+    tarefa: asyncio.Task
+
+
 class Sessao:
-    def __init__(self, ws: WebSocket, config: Config, device_id: str):
+    def __init__(
+        self, ws: WebSocket, config: Config, device_id: str, monitor: MonitorLLM | None = None
+    ):
+        self.monitor = monitor
         self.ws = ws
         self.config = config
         self.device_id = device_id
@@ -55,6 +107,10 @@ class Sessao:
         # que ainda estava sendo transcrita nesse momento é descartada.
         self._epoca = 0
         self._turno: asyncio.Task | None = None
+        self._previa: _Previa | None = None
+        # Verificações da escuta contínua ainda vivas: uma espera a outra, e todas
+        # são canceladas juntas (abort, listen_start, queda do LLM).
+        self._verificacoes: set[asyncio.Task] = set()
         self._frase_aberta = False
         # Memória curta: (fala do usuário, resposta) dos últimos turnos desta conexão.
         self.historico: collections.deque[tuple[str, str]] = collections.deque(
@@ -63,19 +119,48 @@ class Sessao:
         # O receptor de mensagens e a tarefa do turno enviam pela mesma conexão.
         self._envio = asyncio.Lock()
 
-    async def enviar_json(self, mensagem: dict) -> None:
+    async def _enviar(self, envio) -> None:
         async with self._envio:
-            await self.ws.send_text(json.dumps(mensagem, ensure_ascii=False))
+            try:
+                await asyncio.wait_for(envio, ENVIO_LIMITE_S)
+            except TimeoutError:
+                log.warning("sessão %s: envio travado por %d s; fechando", self.id, ENVIO_LIMITE_S)
+                with contextlib.suppress(Exception):
+                    await asyncio.wait_for(self.ws.close(4008, "envio travado"), 1)
+                raise
+
+    async def enviar_json(self, mensagem: dict) -> None:
+        await self._enviar(self.ws.send_text(json.dumps(mensagem, ensure_ascii=False)))
 
     async def enviar_audio(self, pcm: bytes) -> None:
-        async with self._envio:
-            await self.ws.send_bytes(pcm)
+        await self._enviar(self.ws.send_bytes(pcm))
+
+    def estado_livre(self) -> str:
+        """Estado fora de um turno: ocioso, ou desconectado com o LLM fora do ar."""
+        if self.monitor is not None and not self.monitor.disponivel:
+            return "desconectado"
+        return "ocioso"
+
+    async def ao_llm(self, disponivel: bool) -> None:
+        """O monitor viu o LLM cair ou voltar."""
+        if not disponivel:
+            if self.estado == "desconectado":
+                return  # o turno que falhou já avisou
+            self._epoca += 1
+            await self.cancelar_turno()
+            self._limpar_audio()
+            await self.mudar_estado("desconectado")
+        elif self.estado == "desconectado":
+            await self.mudar_estado("ocioso")
 
     async def mudar_estado(self, estado: str) -> None:
         self.estado = estado
         await self.enviar_json({"type": "state", "state": estado})
 
     def _limpar_audio(self) -> None:
+        if self._previa is not None:
+            self._previa.tarefa.cancel()  # a fala da prévia não vale mais
+            self._previa = None
         self._audio.clear()
         self._descartadas = 0
         self._vad = None
@@ -86,6 +171,9 @@ class Sessao:
         await self.mudar_estado("ouvindo")
 
     async def ao_listen_start(self) -> None:
+        if self.estado_livre() == "desconectado":
+            await self.mudar_estado("desconectado")  # sem LLM, o robô não escuta
+            return
         self._epoca += 1
         await self.cancelar_turno()  # falar por cima interrompe o robô
         await self._abrir_escuta()
@@ -108,7 +196,41 @@ class Sessao:
         ):
             log.info("sessão %s: escuta sem fala; voltando a ocioso", self.id)
             self._limpar_audio()
-            await self.mudar_estado("ocioso")
+            await self.mudar_estado(self.estado_livre())
+        else:
+            self._acompanhar_previa(
+                lambda pcm, turno, liberar: asyncio.create_task(
+                    self._responder(pcm, turno, portao=_Portao(_esperar(liberar)))
+                )
+            )
+
+    def _acompanhar_previa(
+        self, iniciar: Callable[[bytes, Turno, asyncio.Event], asyncio.Task]
+    ) -> None:
+        """Começa o turno com PEGASUS_VAD_PREVIA_MS de silêncio e o cancela se a pessoa
+        voltar a falar antes de o VAD decidir que a fala acabou."""
+        vad = self._vad
+        if self._previa is not None and self._previa.fim != vad.fim:
+            self._previa.tarefa.cancel()
+            self._previa = None
+        previa_s = self.config.vad_previa_s
+        if self._previa is None and previa_s and vad.fim is not None and vad.silencio_s >= previa_s:
+            turno = Turno()
+            turno.vad_s = vad.silencio_s
+            liberar = asyncio.Event()
+            tarefa = iniciar(self._recortar(), turno, liberar)
+            self._previa = _Previa(vad.fim, turno, liberar, tarefa)
+
+    def _tomar_previa(self) -> _Previa | None:
+        """A prévia, se ela for da fala que acabou de terminar; senão, a cancela."""
+        previa, self._previa = self._previa, None
+        if previa is None:
+            return None
+        if self._vad is None or previa.fim != self._vad.fim:
+            previa.tarefa.cancel()
+            return None
+        previa.turno.marcar("liberado")
+        return previa
 
     async def ao_listen_stop(self) -> None:
         if self.estado == "ouvindo":
@@ -139,9 +261,16 @@ class Sessao:
         return pcm, turno
 
     async def _encerrar_escuta(self, motivo: str) -> None:
+        if previa := self._tomar_previa():
+            previa.turno.fim_escuta = motivo
+            self._limpar_audio()
+            await self.mudar_estado("pensando")
+            self._turno = previa.tarefa
+            previa.liberar.set()
+            return
         pcm, turno = self._fechar_fala(motivo)
         if not pcm:
-            await self.mudar_estado("ocioso")
+            await self.mudar_estado(self.estado_livre())
             return
         await self.mudar_estado("pensando")
         self._turno = asyncio.create_task(self._responder(pcm, turno))
@@ -150,7 +279,7 @@ class Sessao:
         self._epoca += 1
         await self.cancelar_turno()
         self._limpar_audio()
-        await self.mudar_estado("ocioso")
+        await self.mudar_estado(self.estado_livre())
 
     async def _vigiar(self, dados: bytes) -> None:
         """Escuta contínua em `ocioso`: separa as falas com o VAD e manda cada uma
@@ -158,31 +287,57 @@ class Sessao:
         if self._vad is None:
             self._limpar_audio()
             self._vad = DetectorFala(self.config)
-        self._audio += dados[: _MAX_BYTES - len(self._audio)]
+        self._audio += dados
         evento = self._vad.processar(dados)
-        if evento == "fim" or len(self._audio) >= _MAX_BYTES:
+        if self._vad.fala_s > MAX_FALA_PALAVRA_S:
+            self._limpar_audio()  # o próximo áudio começa um detector novo
+            return
+        if evento == "fim":
+            if previa := self._tomar_previa():
+                previa.turno.fim_escuta = "ativacao"
+                self._limpar_audio()
+                self._turno = previa.tarefa
+                previa.liberar.set()
+                return
             pcm, turno = self._fechar_fala("ativacao")
-            # Uma verificação de cada vez, na ordem das falas: a nova espera a anterior,
-            # e cancelar a nova (abort, listen_start) cancela a anterior junto.
-            anterior = self._turno if self._turno is not None and not self._turno.done() else None
-            self._turno = asyncio.create_task(self._verificar(pcm, turno, self._epoca, anterior))
+            self._turno = self._nova_verificacao(pcm, turno)
         elif not self._vad.falou and len(self._audio) > _VIGIA_LIMITE_BYTES:
             corte = len(self._audio) - round(VIGIA_GUARDA_S * TAXA_ENTRADA) * 2
             del self._audio[:corte]
             self._descartadas += corte // 2
+        else:
+            self._acompanhar_previa(self._nova_verificacao)
+
+    def _nova_verificacao(
+        self, pcm: bytes, turno: Turno, liberar: asyncio.Event | None = None
+    ) -> asyncio.Task:
+        # Uma verificação de cada vez, na ordem das falas: a nova espera a anterior.
+        anterior = self._turno if self._turno is not None and not self._turno.done() else None
+        tarefa = asyncio.create_task(self._verificar(pcm, turno, self._epoca, anterior, liberar))
+        self._verificacoes.add(tarefa)
+        tarefa.add_done_callback(self._verificacoes.discard)
+        return tarefa
 
     async def _verificar(
-        self, pcm: bytes, turno: Turno, epoca: int, anterior: asyncio.Task | None
+        self,
+        pcm: bytes,
+        turno: Turno,
+        epoca: int,
+        anterior: asyncio.Task | None,
+        liberar: asyncio.Event | None = None,
     ) -> None:
         """Transcreve uma fala da escuta contínua e só a atende se ela começar com a
-        palavra de ativação. As outras são descartadas sem registro do áudio nem do texto."""
+        palavra de ativação. As outras são descartadas sem registro do áudio nem do texto.
+        Com `liberar` (prévia), nada é enviado antes de o VAD confirmar o fim da fala."""
         if anterior is not None:
-            with contextlib.suppress(Exception):
-                await anterior
+            # Sem propagar o cancelamento: uma prévia cancelada não leva a anterior junto.
+            await asyncio.wait({anterior})
         if epoca != self._epoca:
             return
         try:
-            texto = await stt.transcrever(_amostras(pcm), self.config)
+            texto = await asyncio.wait_for(
+                stt.transcrever(_amostras(pcm), self.config), self.config.stt_limite_s
+            )
         except Exception as e:
             log.error(
                 "sessão %s: falha ao transcrever na escuta contínua (%s)", self.id, type(e).__name__
@@ -190,23 +345,35 @@ class Sessao:
             return
         pedido = ativacao.pergunta(texto)
         del texto
-        if pedido is None or epoca != self._epoca or self.estado != "ocioso":
+        if pedido is None:
             return
         turno.marcar("stt")
-        self._epoca += 1  # falas seguintes, ainda na fila, são descartadas
-        self._limpar_audio()
-        if pedido:
-            log.info("sessão %s: ativada pela palavra, com pergunta", self.id)
-            turno.texto_usuario = pedido
-            await self.mudar_estado("pensando")
-            await self._responder(pcm, turno, pedido)
-        else:
-            await self._saudar(turno)
 
-    async def _saudar(self, turno: Turno) -> None:
+        async def abrir() -> bool:
+            if liberar is not None:
+                await liberar.wait()
+            if epoca != self._epoca or self.estado != "ocioso":
+                return False
+            self._epoca += 1  # falas seguintes, ainda na fila, são descartadas
+            self._limpar_audio()
+            if pedido:
+                log.info("sessão %s: ativada pela palavra, com pergunta", self.id)
+                await self.mudar_estado("pensando")
+            return True
+
+        portao = _Portao(abrir)
+        if pedido:
+            turno.texto_usuario = pedido
+            await self._responder(pcm, turno, pedido, portao)
+        elif await portao.passar():
+            await self._saudar(turno, len(pcm) / 2 / TAXA_ENTRADA)
+
+    async def _saudar(self, turno: Turno, duracao_s: float) -> None:
         """Só a palavra de ativação: responde "Oi?" e abre a escuta da pergunta."""
         try:
-            pcm, taxa = await tts.sintetizar(SAUDACAO, self.config)
+            pcm, taxa = await asyncio.wait_for(
+                tts.sintetizar(SAUDACAO, self.config), self.config.tts_limite_s
+            )
             await self.mudar_estado("falando")
             await self._enviar_frase(SAUDACAO, pcm, taxa)
             turno.marcar("primeiro_envio")
@@ -217,24 +384,18 @@ class Sessao:
             log.exception("sessão %s: falha na saudação", self.id)
             await self._falhar("Ocorreu um erro no servidor.")
             return
-        ms = {k: round(v * 1000) for k, v in turno.tempos.items()}
-        log.info(
-            "sessão %s: ativada pela palavra; %s em %d ms do fim da fala (vad %d ms, stt %d ms)",
-            self.id,
-            SAUDACAO,
-            round(turno.vad_s * 1000) + ms["primeiro_envio"],
-            round(turno.vad_s * 1000),
-            ms["stt"],
-        )
+        registro.registrar("ativacao", **self._medidas(turno, duracao_s))
 
     async def cancelar_turno(self) -> None:
         """Interrompe na hora o turno em andamento: STT, LLM (o fluxo é fechado e o
         vLLM aborta a geração), pedido de emoção, Piper e envio de áudio."""
         tarefa, self._turno = self._turno, None
-        if tarefa is not None and not tarefa.done():
+        vivas = {t for t in (tarefa, *self._verificacoes) if t is not None and not t.done()}
+        if vivas:
             inicio = time.perf_counter()
-            tarefa.cancel()
-            _, pendentes = await asyncio.wait({tarefa}, timeout=ESPERA_CANCELAMENTO_S)
+            for t in vivas:
+                t.cancel()
+            _, pendentes = await asyncio.wait(vivas, timeout=ESPERA_CANCELAMENTO_S)
             ms = (time.perf_counter() - inicio) * 1000
             if pendentes:
                 log.warning("sessão %s: limpeza do turno passou de %.0f ms", self.id, ms)
@@ -252,41 +413,96 @@ class Sessao:
 
     def _lembrar(self, turno: Turno) -> None:
         # Guarda o que o robô chegou a dizer, mesmo se o turno foi interrompido.
-        if turno.texto_usuario and turno.frases:
+        if turno.texto_usuario and turno.frases and not turno.reserva:
             self.historico.append((turno.texto_usuario, turno.resposta))
 
-    async def _responder(self, pcm: bytes, turno: Turno, texto: str | None = None) -> None:
-        """Responde à fala. Com `texto`, ela já foi transcrita (palavra de ativação)."""
+    async def _responder(
+        self,
+        pcm: bytes,
+        turno: Turno,
+        texto: str | None = None,
+        portao: _Portao | None = None,
+    ) -> None:
+        """Responde à fala. Com `texto`, ela já foi transcrita (palavra de ativação).
+        Com `portao`, o turno começou antes do fim da fala: transcreve e gera, mas só
+        envia algo (inclusive erros) depois de passar por ele."""
         memoria = tuple(self.historico)
         turno.memoria = len(memoria)
+        duracao_s = len(pcm) / 2 / TAXA_ENTRADA
         try:
-            if texto is None:
-                texto = await transcrever(_amostras(pcm), self.config, turno)
-            await self.enviar_json({"type": "stt", "text": texto})
-            if texto:
-                await self._falar(texto, turno, memoria)
-            await self.mudar_estado("ocioso")
+            async with asyncio.timeout(self.config.turno_limite_s):
+                if texto is None:
+                    texto = await transcrever(_amostras(pcm), self.config, turno)
+                await self._falar(texto, turno, memoria, portao)
+            if not await _passou(portao):
+                return
+            await self.mudar_estado(self.estado_livre())
         except asyncio.CancelledError:
+            if portao is not None and not portao.aberto:
+                raise  # prévia cancelada: a pessoa voltou a falar; não houve turno
             self._lembrar(turno)
+            registro.registrar("interrompido", **self._medidas(turno, duracao_s))
             raise
-        except openai.APIError as e:
-            log.error("sessão %s: falha no LLM: %s", self.id, e)
-            await self._falhar("O servidor de linguagem não está disponível.")
-        except Exception:
-            log.exception("sessão %s: falha no turno", self.id)
-            await self._falhar("Ocorreu um erro no servidor.")
+        except Exception as e:
+            if await _passou(portao):
+                await self._tratar_falha(turno, duracao_s, e)
         else:
             self._lembrar(turno)
-            self._registrar(turno, len(pcm) / 2 / TAXA_ENTRADA)
+            tipo = "turno" if turno.frases else "sem_fala"
+            registro.registrar(tipo, **self._medidas(turno, duracao_s))
 
-    async def _falar(self, texto: str, turno: Turno, memoria: tuple[tuple[str, str], ...]) -> None:
-        async for bloco in falar(texto, self.config, turno, memoria):
-            if isinstance(bloco, Emocao):
-                await self.enviar_json({"type": "emotion", "emotion": bloco.nome})
-                continue
-            if self.estado != "falando":
-                await self.mudar_estado("falando")
-            await self._enviar_frase(bloco.frase, bloco.pcm, bloco.taxa, turno)
+    async def _tratar_falha(self, turno: Turno, duracao_s: float, e: Exception) -> None:
+        if isinstance(e, openai.APIError):
+            log.error("sessão %s: falha no LLM (%s)", self.id, type(e).__name__)
+            self._registrar_falha(turno, duracao_s, e)
+            if self.monitor is not None and isinstance(e, openai.APIConnectionError):
+                if not await self.monitor.suspeitar():
+                    # Marca já (sem await no meio), para o aviso do monitor, que vem
+                    # logo depois, não cancelar este turno no meio do envio do erro.
+                    self.estado = "desconectado"
+            await self._falhar("O servidor de linguagem não está disponível.")
+        elif isinstance(e, TimeoutError):
+            log.error("sessão %s: tempo esgotado depois da etapa %s", self.id, turno.etapa)
+            self._registrar_falha(turno, duracao_s, e)
+            await self._falhar("O servidor demorou demais para responder.")
+        else:
+            log.error("sessão %s: falha no turno", self.id, exc_info=e)
+            self._registrar_falha(turno, duracao_s, e)
+            await self._falhar("Ocorreu um erro no servidor.")
+
+    async def _falar(
+        self,
+        texto: str,
+        turno: Turno,
+        memoria: tuple[tuple[str, str], ...],
+        portao: _Portao | None,
+    ) -> None:
+        """Envia o `stt` e a resposta. A geração começa já, antes do portão: o primeiro
+        bloco (áudio ou emoção) fica pronto enquanto o VAD ainda confirma o fim da fala."""
+        resposta = falar(texto, self.config, turno, memoria) if texto else None
+        primeiro = asyncio.ensure_future(anext(resposta, None)) if resposta else None
+        try:
+            if not await _passou(portao):
+                return
+            await self.enviar_json({"type": "stt", "text": texto})
+            if primeiro is None:
+                return
+            bloco = await primeiro
+            while bloco is not None:
+                if isinstance(bloco, Emocao):
+                    await self.enviar_json({"type": "emotion", "emotion": bloco.nome})
+                else:
+                    if self.estado != "falando":
+                        await self.mudar_estado("falando")
+                    await self._enviar_frase(bloco.frase, bloco.pcm, bloco.taxa, turno)
+                bloco = await anext(resposta, None)
+        finally:
+            if primeiro is not None:
+                if not primeiro.done():
+                    primeiro.cancel()
+                with contextlib.suppress(BaseException):
+                    await primeiro  # recolhe o erro de uma prévia que não chegou a enviar
+                await resposta.aclose()  # fecha o fluxo do LLM e o pedido de emoção
 
     async def _enviar_frase(self, frase: str, pcm: bytes, taxa: int, turno: Turno | None = None):
         passo = int(taxa * BLOCO_SAIDA_S) * 2
@@ -306,29 +522,27 @@ class Sessao:
                 self._frase_aberta = False
                 await self.enviar_json({"type": "tts_end"})
             await self.enviar_json({"type": "error", "message": mensagem})
-            await self.mudar_estado("ocioso")
+            await self.mudar_estado(self.estado_livre())
 
-    def _registrar(self, turno: Turno, duracao_s: float) -> None:
-        medidas = {k: round(v * 1000) for k, v in turno.tempos.items()}
-        medidas["tts_soma"] = round(turno.tts_s * 1000)
-        medidas["vad"] = round(turno.vad_s * 1000)
-        if "primeiro_envio" in medidas:
+    def _medidas(self, turno: Turno, duracao_s: float) -> dict:
+        """Campos do registro do turno: tempos e contagens, nunca o texto."""
+        ms = {k: round(v * 1000) for k, v in turno.tempos.items()}
+        ms["tts_soma"] = round(turno.tts_s * 1000)
+        ms["vad"] = round(turno.vad_s * 1000)
+        if "primeiro_envio" in ms:
             # Meta do projeto: do fim da fala ao primeiro som, incluindo a espera do VAD.
-            medidas["fala_ate_primeiro_audio"] = medidas["vad"] + medidas["primeiro_envio"]
-        log.info(
-            "turno %s",
-            json.dumps(
-                {
-                    "sessao": self.id,
-                    "tablet": self.device_id,
-                    "audio_s": round(duracao_s, 2),
-                    "fim_escuta": turno.fim_escuta,
-                    "frases": len(turno.frases),
-                    "memoria": turno.memoria,
-                    "emocoes": turno.emocoes,
-                    "ms": medidas,
-                },
-                ensure_ascii=False,
-            ),
-        )
-        log.debug("sessão %s: %r → %r", self.id, turno.texto_usuario, turno.resposta)
+            ms["fala_ate_primeiro_audio"] = ms["vad"] + ms["primeiro_envio"]
+        return {
+            "sessao": self.id,
+            "tablet": self.device_id,
+            "audio_s": round(duracao_s, 2),
+            "fim_escuta": turno.fim_escuta,
+            "frases": len(turno.frases),
+            "memoria": turno.memoria,
+            "emocoes": turno.emocoes,
+            "ms": ms,
+        }
+
+    def _registrar_falha(self, turno: Turno, duracao_s: float, erro: BaseException) -> None:
+        dados = self._medidas(turno, duracao_s)
+        registro.registrar("falha", etapa=turno.etapa, erro=type(erro).__name__, **dados)

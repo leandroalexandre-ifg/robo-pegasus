@@ -1,0 +1,109 @@
+#!/bin/bash
+# Estado do Robô Pegasus: serviços, vLLM, API, GPU1 e turnos do dia.
+# Não mostra segredos: do pegasus.env lê só as portas e a pasta de log.
+# Instalação: ln -s "$PWD/servidor/scripts/pegasus-status" ~/.local/bin/pegasus-status
+# Sai com 0 se o vLLM e a API respondem; 1 caso contrário.
+
+set -u
+ENV_ARQ="$HOME/.config/robo-pegasus/pegasus.env"
+GPU=1
+
+ler_env() {  # ler_env CHAVE PADRAO: o último valor da chave no pegasus.env, sem carregar o resto
+    local valor=""
+    [ -r "$ENV_ARQ" ] && valor=$(sed -n "s/^$1=//p" "$ENV_ARQ" | tail -n 1 | tr -d "\"'")
+    echo "${valor:-$2}"
+}
+
+PORTA_API=$(ler_env PEGASUS_PORTA_API 8100)
+PORTA_LLM=$(ler_env PEGASUS_PORTA_LLM 8101)
+PASTA_LOG=$(ler_env PEGASUS_LOG_PASTA "${XDG_STATE_HOME:-$HOME/.local/state}/robo-pegasus")
+codigo=0
+
+titulo() { printf '\n\033[1m== %s ==\033[0m\n' "$1"; }
+
+titulo "Serviços (systemd --user)"
+for unidade in pegasus-llm pegasus-api; do
+    declare -A p=()
+    while IFS='=' read -r chave valor; do
+        p[$chave]=$valor
+    done < <(systemctl --user show "$unidade" \
+        --property=ActiveState,SubState,UnitFileState,NRestarts,ActiveEnterTimestamp 2>/dev/null)
+    printf '%-12s %-8s %-11s início com o sistema: %-10s reinícios: %-3s desde: %s\n' \
+        "$unidade" "${p[ActiveState]:-?}" "(${p[SubState]:-?})" "${p[UnitFileState]:-transitória}" \
+        "${p[NRestarts]:-0}" "${p[ActiveEnterTimestamp]:-—}"
+    unset p
+done
+
+titulo "vLLM (127.0.0.1:$PORTA_LLM)"
+if modelos=$(curl -sf -m 3 "http://127.0.0.1:$PORTA_LLM/v1/models"); then
+    python3 -c 'import json,sys; print("responde; modelo:", ", ".join(m["id"] for m in json.load(sys.stdin)["data"]))' <<<"$modelos"
+else
+    echo "não responde"
+    codigo=1
+fi
+
+titulo "API (127.0.0.1:$PORTA_API)"
+if status=$(curl -sf -m 3 "http://127.0.0.1:$PORTA_API/status"); then
+    python3 - "$status" <<'EOF'
+import json, sys
+s = json.loads(sys.argv[1])
+llm = s["llm"]
+print(f"no ar há {s['no_ar_s'] // 60} min; ativação: {s['ativacao']}; protocolo v{s['versao_protocolo']}")
+situacao = "disponível" if llm["disponivel"] else "FORA DO AR (tablets em desconectado)"
+print(f"LLM visto pela API: {situacao} há {llm['desde_s']} s; quedas desde a subida: {llm['quedas']}")
+estados = ", ".join(f"{n} {e}" for e, n in s["sessoes"]["por_estado"].items()) or "nenhuma"
+print(f"tablets conectados: {s['sessoes']['total']} ({estados})")
+t = s["turnos"]
+tipos = ", ".join(f"{n} {k}" for k, n in sorted(t["por_tipo"].items())) or "nenhum"
+print(f"turnos desde a subida: {tipos}")
+if lat := t.get("fala_ate_primeiro_audio_ms"):
+    print(f"fim da fala → 1º áudio (últimos {lat['amostras']}): mediana {lat['mediana']} ms, "
+          f"p90 {lat['p90']} ms, máx {lat['max']} ms (meta 1500)")
+EOF
+else
+    http=$(curl -s -o /dev/null -m 3 -w '%{http_code}' "http://127.0.0.1:$PORTA_API/status")
+    if [ "$http" = "000" ]; then
+        echo "não responde"
+    else
+        echo "responde, mas sem /status (HTTP $http): versão antiga? reinicie a API"
+    fi
+    codigo=1
+fi
+
+titulo "GPU$GPU"
+nvidia-smi -i "$GPU" --query-gpu=name,memory.used,memory.total,utilization.gpu,temperature.gpu,power.draw \
+    --format=csv,noheader,nounits |
+    awk -F', ' '{printf "%s: %s / %s MiB (%.0f%%), uso %s%%, %s °C, %s W\n", $1, $2, $3, 100*$2/$3, $4, $5, $6}'
+uuid=$(nvidia-smi -i "$GPU" --query-gpu=uuid --format=csv,noheader)
+nvidia-smi --query-compute-apps=gpu_uuid,pid,used_memory --format=csv,noheader,nounits |
+    while IFS=', ' read -r u pid mem; do
+        [ "$u" = "$uuid" ] || continue
+        printf '  pid %-8s %6s MiB  %s\n' "$pid" "$mem" "$(ps -o user=,comm= -p "$pid" 2>/dev/null || echo '?')"
+    done
+
+titulo "Turnos de hoje ($PASTA_LOG/turnos.jsonl)"
+python3 - "$PASTA_LOG/turnos.jsonl" <<'EOF'
+import collections, json, statistics, sys, time
+hoje = time.strftime("%Y-%m-%d")
+tipos, lat = collections.Counter(), []
+try:
+    with open(sys.argv[1]) as f:
+        for linha in f:
+            r = json.loads(linha)
+            if not r["t"].startswith(hoje):
+                continue
+            tipos[r["tipo"]] += 1
+            if r["tipo"] == "turno" and "fala_ate_primeiro_audio" in r["ms"]:
+                lat.append(r["ms"]["fala_ate_primeiro_audio"])
+except FileNotFoundError:
+    print("sem registro ainda")
+    sys.exit()
+print(", ".join(f"{n} {t}" for t, n in sorted(tipos.items())) or "nenhum turno hoje")
+if lat:
+    lat.sort()
+    print(f"fim da fala → 1º áudio: mediana {round(statistics.median(lat))} ms, "
+          f"p90 {lat[int(0.9 * (len(lat) - 1))]} ms, máx {lat[-1]} ms; "
+          f"{sum(x > 1500 for x in lat)} de {len(lat)} acima da meta")
+EOF
+
+exit $codigo

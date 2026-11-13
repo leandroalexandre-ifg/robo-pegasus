@@ -7,6 +7,7 @@ from pathlib import Path
 RAIZ_REPOSITORIO = Path(__file__).resolve().parents[2]
 SERVIDOR = RAIZ_REPOSITORIO / "servidor"
 MODELOS = RAIZ_REPOSITORIO / "modelos"
+_PASTA_ESTADO = Path(os.environ.get("XDG_STATE_HOME") or Path.home() / ".local" / "state")
 
 
 @dataclass(frozen=True)
@@ -19,7 +20,7 @@ class Config:
     llm_temperatura: float
     emocao_modo: str  # "antes": a fala chama a ferramenta; "paralelo": requisição própria
     memoria_turnos: int  # turnos anteriores da sessão enviados ao LLM
-    emocao_espera_s: float  # quanto o primeiro áudio pode esperar pela emoção (paralelo)
+    emocao_espera_s: float  # prazo da emoção depois do primeiro áudio (paralelo); depois, neutro
 
     # Whisper (faster-whisper)
     whisper_modelo: str
@@ -40,7 +41,18 @@ class Config:
     # Silero VAD: fim da fala sem listen_stop
     vad_limiar: float
     vad_silencio_s: float  # silêncio que encerra a fala
+    vad_previa_s: float  # silêncio com que o turno já começa, sem enviar nada; 0 desliga
     vad_sem_fala_s: float  # escuta sem nenhuma fala que volta a ocioso
+
+    # Limites de tempo de cada etapa. A etapa que passa do limite encerra o turno com erro.
+    stt_limite_s: float  # transcrição de uma fala
+    llm_limite_s: float  # espera por cada pedaço do fluxo do LLM (inclui o primeiro)
+    tts_limite_s: float  # síntese de uma frase
+    turno_limite_s: float  # turno inteiro, do fim da fala ao último áudio
+
+    # Registro dos turnos (só tempos e contagens), em arquivo rotacionado diariamente
+    log_pasta: Path
+    log_dias: int  # arquivos antigos guardados
 
     # Como a escuta começa: "toque" (listen_start) ou "palavra" ("Pegasus", em escuta contínua)
     ativacao: str
@@ -94,7 +106,14 @@ def carregar_config(ambiente: dict[str, str] | None = None) -> Config:
         persona_arquivo=Path(env.get("PEGASUS_PERSONA", str(SERVIDOR / "persona.toml"))),
         vad_limiar=float(env.get("PEGASUS_VAD_LIMIAR", "0.5")),
         vad_silencio_s=int(env.get("PEGASUS_VAD_SILENCIO_MS", "600")) / 1000,
+        vad_previa_s=int(env.get("PEGASUS_VAD_PREVIA_MS", "300")) / 1000,
         vad_sem_fala_s=int(env.get("PEGASUS_VAD_SEM_FALA_MS", "8000")) / 1000,
+        stt_limite_s=int(env.get("PEGASUS_STT_LIMITE_MS", "5000")) / 1000,
+        llm_limite_s=int(env.get("PEGASUS_LLM_LIMITE_MS", "10000")) / 1000,
+        tts_limite_s=int(env.get("PEGASUS_TTS_LIMITE_MS", "5000")) / 1000,
+        turno_limite_s=int(env.get("PEGASUS_TURNO_LIMITE_MS", "60000")) / 1000,
+        log_pasta=Path(env.get("PEGASUS_LOG_PASTA", str(_PASTA_ESTADO / "robo-pegasus"))),
+        log_dias=int(env.get("PEGASUS_LOG_DIAS", "30")),
         ativacao=_modo_ativacao(env.get("PEGASUS_ATIVACAO", "toque")),
         api_host=env.get("PEGASUS_HOST", "127.0.0.1"),
         api_porta=int(env.get("PEGASUS_PORTA_API", "8100")),
@@ -115,7 +134,9 @@ def resumo_publico(config: Config) -> dict[str, object]:
         "voz": config.piper_voz.stem,
         "persona": str(config.persona_arquivo),
         "vad_silencio_ms": round(config.vad_silencio_s * 1000),
+        "vad_previa_ms": round(config.vad_previa_s * 1000),
         "memoria_turnos": config.memoria_turnos,
+        "log_turnos": f"{config.log_pasta} ({config.log_dias} dias)",
         "whisper": f"{config.whisper_modelo}, {whisper}, {config.whisper_precisao}",
     }
     if config.emocao_modo == "paralelo":

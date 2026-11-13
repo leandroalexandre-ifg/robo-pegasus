@@ -1,0 +1,10 @@
+[Unit]
+Description=Robô Pegasus - LLM (vLLM)
+StartLimitIntervalSec=600
+StartLimitBurst=3
+
+[Service]
+EnvironmentFile=%h/.config/robo-pegasus/pegasus.env
+ExecStart=/data/projects/leandro/robo-pegasus/.venv/bin/vllm serve ${PEGASUS_MODELO} --host 127.0.0.1 --port ${PEGASUS_PORTA_LLM} --gpu-memory-utilization 0.85 --max-model-len 8192 --max-num-seqs 8 --enable-auto-tool-choice --tool-call-parser qwen3_coder
+Restart=on-failure
+RestartSec=15

@@ -40,7 +40,7 @@ Tablet                                   Servidor
   │                                        │   o VAD detecta o fim da fala
   │ ◄──────────────── state "pensando" ─── │   (ou o tablet envia listen_stop)
   │ ◄────────────────────── stt {text} ─── │
-  │ ◄──────────── emotion {"feliz"} ────── │   uma por turno, antes do 1º áudio
+  │ ◄──────────── emotion {"feliz"} ────── │   uma por turno; pode vir já no meio da fala
   │ ◄───────────────── state "falando" ─── │
   │ ◄─────────────── tts_start {frase} ─── │   ┐
   │ ◄══════════════ áudio PCM da frase ═══ │   │ uma vez por frase
@@ -49,6 +49,8 @@ Tablet                                   Servidor
 ```
 
 **Fim da fala:** o servidor detecta sozinho, com o Silero VAD, quando o usuário parou de falar: depois de `PEGASUS_VAD_SILENCIO_MS` (padrão 600 ms) de silêncio após a fala, a escuta termina e o servidor envia `state "pensando"`. O tablet não precisa enviar `listen_stop`, mas pode, para encerrar antes.
+
+**Prévia:** com `PEGASUS_VAD_PREVIA_MS` (padrão 300 ms) de silêncio, o servidor já começa o turno: transcreve, verifica a palavra de ativação e gera a primeira frase e a voz dela. Ele não envia nada ao tablet antes de completar `PEGASUS_VAD_SILENCIO_MS` (ou de receber `listen_stop`). Se a pessoa voltar a falar nesse meio-tempo, o servidor descarta a prévia sem deixar rastro e espera a fala terminar de novo. Para o tablet, nada muda: as mensagens e a ordem delas são as mesmas, só chegam mais cedo. `PEGASUS_VAD_PREVIA_MS=0` desliga a prévia.
 
 **Meio-duplex:** no modo `toque`, o tablet desliga o microfone ao receber `state "pensando"` (ou `state "ocioso"`) e só volta a ouvir com um novo `listen_start`. O servidor ignora áudio recebido fora do estado `ouvindo`. No modo `palavra`, veja a seção a seguir.
 
@@ -68,6 +70,7 @@ No estado `ocioso`, o servidor separa as falas com o VAD (o mesmo fim de fala de
 - **"Pegasus" seguido de mais texto** ("Pegasus, qual é o seu nome?"): o resto da frase é a pergunta. O servidor envia `state "pensando"` e segue um turno normal, com `stt` trazendo só a pergunta, sem a palavra.
 - **Só "Pegasus":** o servidor responde "Oi?" (`state "falando"`, uma frase `tts_start`/áudio/`tts_end`, sem `emotion`) e abre a escuta (`state "ouvindo"`). A fala seguinte é a pergunta, sem precisar repetir a palavra. Sem fala em `PEGASUS_VAD_SEM_FALA_MS`, volta a `ocioso`.
 - **Qualquer outra fala:** é descartada na hora. O servidor não envia nada ao tablet, não registra nada no log e não guarda o áudio nem o texto. A fala também não entra na memória da sessão.
+- **Fala com mais de 10 s:** é descartada sem transcrever, do mesmo jeito. Um chamado é curto; uma fala longa é conversa ou ruído da sala, que deixa o Whisper lento. A fala que continua depois do corte conta como fala nova.
 
 Valem as variações próximas que o Whisper produz: acentos e maiúsculas são ignorados ("Pégasus", "PEGASUS"), e grafias como "Pégaso", "Pegasos" ou "Pegassus" também valem. A palavra precisa abrir a frase, podendo vir só depois de um chamamento ("Ei, Pegasus", "Oi, Pegasus"): "Qual é o seu nome, Pegasus?" é descartada.
 
@@ -180,7 +183,9 @@ A cada 15 s. `t` é opcional e volta igual no `pong`. Sem nenhuma mensagem do ta
 {"type": "state", "state": "ouvindo"}
 ```
 
-Estados: `ocioso`, `ouvindo`, `pensando`, `falando`. O estado `desconectado` existe só no app, quando a conexão cai.
+Estados: `ocioso`, `ouvindo`, `pensando`, `falando`, `desconectado`.
+
+`desconectado` vindo do servidor quer dizer que a conexão está de pé, mas o servidor de linguagem (vLLM) está fora do ar. O app também mostra `desconectado` quando a própria conexão cai. Ver "Servidor de linguagem fora do ar".
 
 ### `stt`
 
@@ -224,6 +229,17 @@ Fim do áudio da frase. Pode vir outra frase (`tts_start`) ou `state "ocioso"`.
 
 Falha no turno (por exemplo, LLM desligado). A mensagem é em português e pode ser exibida ou falada. O servidor volta a `ocioso` em seguida; a conexão continua aberta.
 
+Cada etapa tem um limite de tempo; a que passar dele encerra o turno com `error` "O servidor demorou demais para responder.":
+
+| Etapa | Variável | Padrão |
+| --- | --- | --- |
+| Transcrição de uma fala (Whisper) | `PEGASUS_STT_LIMITE_MS` | 5 s |
+| Cada pedaço do fluxo do LLM, inclusive o primeiro | `PEGASUS_LLM_LIMITE_MS` | 10 s |
+| Síntese de uma frase (Piper) | `PEGASUS_TTS_LIMITE_MS` | 5 s |
+| Turno inteiro, do fim da fala ao último áudio | `PEGASUS_TURNO_LIMITE_MS` | 60 s |
+
+O que já foi falado fica na memória da sessão. Um envio ao tablet travado por 10 s fecha a conexão com o código 4008.
+
 ### `emotion`
 
 ```json
@@ -232,13 +248,23 @@ Falha no turno (por exemplo, LLM desligado). A mensagem é em português e pode 
 
 Emoção a sobrepor ao estado do rosto durante a resposta. Valores: `neutro`, `feliz`, `triste`, `surpreso`, `pensativo`, `bravo`.
 
-- **Uma por turno com resposta, sempre antes do primeiro áudio:** chega depois de `stt` e antes de `state "falando"` e do primeiro `tts_start`. O app pode aplicá-la ao rosto antes de tocar qualquer som.
+- **Uma por turno com resposta, assim que fica pronta:** chega depois de `stt`, antes ou durante a fala. O primeiro áudio não espera por ela. No modo `antes`, ela vem antes do primeiro `tts_start`. No modo `paralelo`, costuma chegar enquanto a primeira frase toca, entre o `tts_end` de uma frase e o `tts_start` da seguinte. O app a aplica ao rosto na hora, com o áudio tocando.
 - **Origem:** o LLM escolhe a emoção chamando a ferramenta `definir_emocao(emocao)`. O servidor valida o valor contra a lista acima. Há dois modos (`PEGASUS_EMOCAO_MODO`):
   - `antes` (padrão): a própria requisição da fala oferece a ferramenta e o prompt pede que ela seja chamada antes de qualquer palavra da resposta.
   - `paralelo`: uma requisição própria, em paralelo com a fala, obriga a chamada.
-- **Valor padrão:** o servidor envia `neutro` quando o LLM não chama a ferramenta, devolve um valor fora da lista ou falha. No modo `antes`, isso acontece se a primeira frase ficar pronta sem que a ferramenta tenha sido chamada; no modo `paralelo`, se a emoção não chegar em até `PEGASUS_EMOCAO_ESPERA_MS` (padrão 1000 ms) depois da primeira frase pronta. Uma emoção que chegue depois disso é descartada.
+- **Valor padrão:** o servidor envia `neutro` quando o LLM não chama a ferramenta, devolve um valor fora da lista ou falha. No modo `antes`, isso acontece se a primeira frase ficar pronta sem que a ferramenta tenha sido chamada; no modo `paralelo`, se a emoção não chegar em até `PEGASUS_EMOCAO_ESPERA_MS` (padrão 1000 ms) depois do primeiro áudio. Uma emoção que chegue depois disso é descartada.
 - **Duração:** a emoção vale até o próximo `listen_start` ou até 10 s depois de o rosto voltar a `ocioso` com o áudio da resposta já tocado; então o rosto volta a `neutro`. O app não zera a emoção no próprio `state "ocioso"` porque o áudio da resposta ainda está tocando nesse momento (o servidor envia mais rápido do que toca). Turnos sem resposta (`stt` vazio, `error`, `abort` antes do primeiro áudio) e o "Oi?" da palavra de ativação não têm `emotion`.
 - **Texto limpo:** o texto de `tts_start` e o áudio nunca contêm marcações de emoção nem de ferramenta. O servidor encerra a fala na primeira imitação de chamada escrita pelo LLM (`<tool_call>`, `definir_emocao(...)`, `{"emocao": ...}`) e remove marcas como `[feliz]` ou `*sorri*`, emojis e símbolos de markdown antes da síntese.
+
+## Servidor de linguagem fora do ar
+
+O servidor verifica o vLLM a cada 5 s. Com duas verificações seguidas sem resposta, ou com um turno que não conseguiu falar com ele, o servidor:
+
+- interrompe o turno em andamento em todas as sessões (um turno que falhou envia antes o `error`);
+- envia `state "desconectado"` a todos os tablets, e também no lugar do `ocioso` inicial a quem se conectar nesse período;
+- deixa de escutar: responde a `listen_start` com `state "desconectado"` de novo e descarta o áudio, inclusive o da escuta contínua.
+
+A conexão continua aberta, com `ping`/`pong`. Com o vLLM fora, o servidor o verifica a cada 2 s. Quando ele volta, o servidor envia `state "ocioso"`, e o robô volta a escutar sem o tablet precisar reconectar.
 
 ## Fechamento
 
