@@ -7,7 +7,9 @@ Este documento é a fonte da verdade do protocolo. Ao mudar o protocolo, atualiz
 ## Conexão
 
 - WebSocket em `/ws`. O servidor escuta em `127.0.0.1:8100` (`PEGASUS_HOST` e `PEGASUS_PORTA_API`). O tablet chega a ele por túnel SSH, porta liberada ou VPN.
-- Uma conexão por tablet. Na mesma conexão trafegam:
+- Uma conexão por tablet (por token). Se o mesmo tablet abre outra conexão, a nova vence e a antiga é fechada com 4009: depois de uma queda de rede, a conexão antiga pode ficar pendurada até o limite de inatividade, e recusar a nova travaria a reconexão. O app não deve reconectar sozinho depois de um 4009, senão dois aparelhos com o mesmo token ficariam se derrubando.
+- No máximo `PEGASUS_MAX_SESSOES` (padrão 4) tablets ao mesmo tempo; acima disso, a nova conexão é fechada com 4013 logo depois do `hello` válido.
+- Na mesma conexão trafegam:
   - **quadros de texto**: controle, em JSON, sempre com o campo `type`;
   - **quadros binários**: áudio PCM, sem cabeçalho.
 - Campos desconhecidos devem ser ignorados, para permitir evolução sem quebrar o outro lado.
@@ -314,6 +316,8 @@ A conexão continua aberta, com `ping`/`pong`. Com o vLLM fora, o servidor o ver
 | 4000 | Erro de protocolo (JSON inválido, `hello` ausente ou fora de ordem, versão ou formato de áudio não suportado) |
 | 4001 | Token inválido |
 | 4008 | Tempo esgotado (sem `hello` em 5 s ou sem mensagens por 45 s) |
+| 4009 | O mesmo tablet abriu outra conexão (não reconectar sozinho) |
+| 4013 | Limite de sessões simultâneas atingido (reconectar com espera crescente) |
 | HTTP 403 | IP bloqueado por `hello` inválidos repetidos (a conexão nem chega a abrir) |
 
 Ao perder a conexão, o app mostra `desconectado` e tenta reconectar com espera crescente.

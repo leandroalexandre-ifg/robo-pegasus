@@ -826,6 +826,43 @@ def test_device_id_recusado_vai_limpo_para_o_log(cliente, pipeline, caplog):
     assert TOKEN[:-1] not in caplog.text
 
 
+def test_uma_sessao_por_token_a_nova_fecha_a_antiga(cliente, pipeline, caplog):
+    with cliente.websocket_connect("/ws") as antiga:
+        _conectar(antiga)
+        with cliente.websocket_connect("/ws") as nova:
+            _conectar(nova)
+            with pytest.raises(WebSocketDisconnect) as fechou:
+                antiga.receive_json()
+            assert fechou.value.code == 4009
+            _falar(nova)  # a nova segue funcionando
+            assert _tipos(_receber_ate_ocioso(nova))[:2] == ["pensando", "stt"]
+            resposta = cliente.get("/status").json()
+            assert resposta["sessoes"]["total"] == 1
+    assert "conectou de novo" in caplog.text
+
+
+def test_limite_de_sessoes_simultaneas(monkeypatch, pipeline):
+    terceiro = "terceiro-tablet-QwErTyUiOpAsDfGhJkLzXcVbNm1234567890"
+    monkeypatch.setenv("PEGASUS_TABLETS", f"outro:{OUTRO},tablet-teste:{TOKEN},terceiro:{terceiro}")
+    monkeypatch.setenv("PEGASUS_MAX_SESSOES", "2")
+    with TestClient(main.app) as c:
+        with c.websocket_connect("/ws") as a, c.websocket_connect("/ws") as b:
+            _conectar(a)
+            b.send_json(_hello(token=OUTRO))
+            b.receive_json(), b.receive_json()
+            with c.websocket_connect("/ws") as cheio:
+                cheio.send_json(_hello(token=terceiro))
+                with pytest.raises(WebSocketDisconnect) as fechou:
+                    cheio.receive_json()
+                assert fechou.value.code == 4013
+            # o mesmo tablet reconectando não conta como sessão a mais
+            with c.websocket_connect("/ws") as de_novo:
+                _conectar(de_novo)
+        with c.websocket_connect("/ws") as depois:  # com vaga, o terceiro entra
+            depois.send_json(_hello(token=terceiro))
+            assert depois.receive_json()["type"] == "hello"
+
+
 def _registros(pipeline):
     linhas = pipeline["turnos"].read_text().splitlines()
     return [json.loads(linha) for linha in linhas]

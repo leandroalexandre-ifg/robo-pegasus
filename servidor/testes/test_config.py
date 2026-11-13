@@ -76,6 +76,7 @@ def test_resumo_publico_sem_segredos():
     assert resumo == {
         "ativacao": "toque",
         "tablets": ["t1"],
+        "max_sessoes": 4,
         "conversa_s": 8.0,
         "emocao_modo": "paralelo",
         "llm_modelo": "qwen-teste",

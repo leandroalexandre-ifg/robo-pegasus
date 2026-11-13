@@ -33,6 +33,8 @@ TEMPO_INATIVO_S = 45
 FECHA_PROTOCOLO = 4000
 FECHA_TOKEN = 4001
 FECHA_TEMPO = 4008
+FECHA_SUBSTITUIDA = 4009  # o mesmo tablet abriu outra conexão
+FECHA_CHEIO = 4013  # limite de sessões simultâneas
 FECHA_POLITICA = 1008  # IP bloqueado (antes do accept: o cliente recebe HTTP 403)
 
 
@@ -73,6 +75,7 @@ async def lifespan(app: FastAPI):
     app.state.bloqueio = seguranca.Bloqueio(config.proxies)
     sessoes: set[Sessao] = set()
     app.state.sessoes = sessoes
+    app.state.por_tablet = {}  # nome do tablet → sua sessão (uma por token)
     app.state.inicio = time.time()
 
     async def avisar(disponivel: bool) -> None:
@@ -195,25 +198,53 @@ async def conexao(ws: WebSocket) -> None:
         return
 
     # O tablet é quem o token diz; o device_id do hello não identifica ninguém.
+    sessoes: set[Sessao] = ws.app.state.sessoes
+    por_tablet: dict[str, Sessao] = ws.app.state.por_tablet
+    antiga = por_tablet.get(tablet)
+    if antiga is None and len(sessoes) >= config.max_sessoes:
+        log.warning(
+            "conexão recusada de %s: limite de %d sessões (tablet %s)",
+            ip,
+            config.max_sessoes,
+            tablet,
+        )
+        await ws.close(FECHA_CHEIO, "limite de sessões simultâneas")
+        return
     monitor: saude.MonitorLLM = ws.app.state.monitor
     sessao = Sessao(ws, config, tablet, monitor)
-    log.info("sessão %s: tablet %s conectado de %s", sessao.id, sessao.device_id, ip)
-    await sessao.enviar_json(
-        {
-            "type": "hello",
-            "version": VERSAO_PROTOCOLO,
-            "session_id": sessao.id,
-            "audio": {"format": "pcm_s16le", "sample_rate": ws.app.state.taxa_saida, "channels": 1},
-            "activation": config.ativacao,
-        }
-    )
-    await sessao.mudar_estado(sessao.estado_livre())
-    ws.app.state.sessoes.add(sessao)
-
+    # Registra já, sem await no meio: duas conexões ao mesmo tempo não passam juntas
+    # pelas verificações acima.
+    por_tablet[tablet] = sessao
+    sessoes.add(sessao)
     try:
+        if antiga is not None:
+            # Uma conexão nova vence a antiga: depois de uma queda de rede, a antiga
+            # pode ficar pendurada até o limite de inatividade e travaria a reconexão.
+            log.warning(
+                "tablet %s conectou de novo de %s; fechando a sessão %s", tablet, ip, antiga.id
+            )
+            sessoes.discard(antiga)
+            await antiga.substituir(FECHA_SUBSTITUIDA, "o tablet abriu outra conexão")
+        log.info("sessão %s: tablet %s conectado de %s", sessao.id, sessao.device_id, ip)
+        await sessao.enviar_json(
+            {
+                "type": "hello",
+                "version": VERSAO_PROTOCOLO,
+                "session_id": sessao.id,
+                "audio": {
+                    "format": "pcm_s16le",
+                    "sample_rate": ws.app.state.taxa_saida,
+                    "channels": 1,
+                },
+                "activation": config.ativacao,
+            }
+        )
+        await sessao.mudar_estado(sessao.estado_livre())
         await _atender(ws, sessao)
     finally:
-        ws.app.state.sessoes.discard(sessao)
+        sessoes.discard(sessao)
+        if por_tablet.get(tablet) is sessao:
+            del por_tablet[tablet]
         with contextlib.suppress(Exception):
             await sessao.encerrar()
         log.info("sessão %s: desconectada", sessao.id)
