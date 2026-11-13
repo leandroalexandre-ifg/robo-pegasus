@@ -17,6 +17,10 @@ Emoções (mensagem `emotion`): `neutro`, `feliz` (olhos em meia-lua, sorriso), 
 - **Tocar** inicia a escuta. O servidor percebe sozinho (VAD) quando você parou de falar e responde; se ninguém falar em 8 s, o rosto volta ao ocioso. Tocar durante a escuta encerra antes, sem esperar o VAD.
 - **Tocar enquanto ele pensa ou fala** envia `abort`, corta a voz na hora e volta a ouvir.
 - **Toque longo** abre a configuração do servidor (endereço, token e identificação do tablet). Fica salva no tablet.
+- **Reconexão:** depois de uma queda, o app tenta de novo sozinho (1 a 30 s). Exceções, conforme os fechamentos do protocolo:
+  - **4009** ("Conectado em outro aparelho": o mesmo token abriu outra conexão) e **4001** ("Token inválido") não reconectam sozinhos. Um toque na tela ou um token novo pelo toque longo tenta de novo. Insistir com o token errado faria o servidor bloquear o IP (5 `hello` inválidos em 10 min).
+  - **4013** ("Servidor cheio") tenta de novo com espera de 15 s a 2 min.
+- **Token:** cada tablet tem o seu (`PEGASUS_TABLETS` no servidor). O salvo pelo toque longo vale mais que o `PEGASUS_TOKEN` da compilação.
 - Meio-duplex: o microfone só fica ligado enquanto está verde.
 
 ### Ativação por palavra (Fase 4b)
