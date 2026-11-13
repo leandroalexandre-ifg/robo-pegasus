@@ -47,6 +47,8 @@ class Config:
     ferramentas: tuple[str, ...]
     fuso: str  # fuso horário do "[agora: …]" e do clima
     cidade: str  # cidade do clima quando a pessoa não diz qual
+    busca_url: str  # SearXNG local (só 127.0.0.1)
+    busca_por_minuto: int  # buscas por minuto, somando todos os tablets
 
     # Silero VAD: fim da fala sem listen_stop
     vad_limiar: float
@@ -140,6 +142,8 @@ def carregar_config(ambiente: dict[str, str] | None = None) -> Config:
         ferramentas=_ferramentas(env.get("PEGASUS_FERRAMENTAS", "")),
         fuso=_fuso(env.get("PEGASUS_FUSO", "America/Sao_Paulo")),
         cidade=env.get("PEGASUS_CIDADE", "Goiânia").strip() or "Goiânia",
+        busca_url=env.get("PEGASUS_BUSCA_URL", "http://127.0.0.1:8104"),
+        busca_por_minuto=int(env.get("PEGASUS_BUSCA_POR_MINUTO", "20")),
         vad_limiar=float(env.get("PEGASUS_VAD_LIMIAR", "0.5")),
         vad_silencio_s=int(env.get("PEGASUS_VAD_SILENCIO_MS", "600")) / 1000,
         vad_previa_s=int(env.get("PEGASUS_VAD_PREVIA_MS", "300")) / 1000,
