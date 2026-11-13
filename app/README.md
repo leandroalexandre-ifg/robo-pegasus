@@ -26,7 +26,8 @@ O modo vem do servidor (`PEGASUS_ATIVACAO`, campo `activation` do `hello`); o ap
 - **`toque`** (padrão): como acima.
 - **`palavra`:** o microfone fica aberto o tempo todo e o servidor espera o nome: "Pegasus, que horas são?" já é a pergunta; só "Pegasus" faz o robô responder "Oi?" e ouvir a próxima fala. Outras falas são descartadas pelo servidor. O rosto mostra a diferença:
   - **Esperando o nome** (azul): rosto relaxado, pálpebras um pouco baixas, olhar vagueando devagar e um **pontinho verde** pulsando abaixo da boca.
-  - **Conversando** (verde ao ouvir, depois âmbar e roxo): ao ouvir o nome, os olhos se abrem rapidamente e o rosto fica atento, com olhos mais abertos e o olhar parado em quem fala, até o fim da resposta.
+  - **Conversando** (verde ao ouvir, depois âmbar e roxo): ao ouvir o nome, os olhos se abrem rapidamente e o rosto fica atento, com olhos mais abertos e o olhar parado em quem fala.
+  - **Janela de conversa** (mensagem `conversation`): depois de cada resposta o servidor espera a continuação por uns 8 s sem precisar do nome, e o rosto continua atento (verde). Quando ela acaba (silêncio, "tchau, Pegasus", toque que interrompe, erro), o servidor manda `esperando_nome` e o rosto volta ao relaxado com o pontinho.
 - O toque continua valendo nos dois modos.
 - Meio-duplex no modo `palavra`: o microfone fecha no primeiro `tts_start` e só reabre depois de tocar todo o áudio recebido, com 250 ms de folga, para o robô não ouvir a própria voz.
 
