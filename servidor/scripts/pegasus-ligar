@@ -1,5 +1,6 @@
 #!/bin/bash
-# Liga o Robô Pegasus: vLLM (pegasus-llm) e API (pegasus-api), no systemd --user.
+# Liga o Robô Pegasus: vLLM (pegasus-llm), API (pegasus-api) e busca (pegasus-busca,
+# SearXNG em Docker, sem GPU), no systemd --user.
 # Não habilita nada para iniciar com o sistema.
 # Instalação: ln -s "$PWD/servidor/scripts/pegasus-ligar" ~/.local/bin/pegasus-ligar
 set -u
@@ -11,6 +12,8 @@ precisa=0
 llm_no_ar=1
 systemctl --user is-active -q pegasus-llm || { llm_no_ar=0; precisa=$((precisa + MIB_LLM)); }
 systemctl --user is-active -q pegasus-api || precisa=$((precisa + MIB_API))
+# A busca não usa GPU: sobe sempre. Se falhar, o robô funciona sem busca_web.
+systemctl --user start pegasus-busca || echo "Aviso: a busca (SearXNG) não subiu; busca_web fica indisponível."
 if [ "$precisa" -eq 0 ]; then
     echo "vLLM e API já estão no ar."
     exit 0

@@ -1,4 +1,5 @@
 #!/bin/bash
-# Desliga o Robô Pegasus: API e vLLM (a API para primeiro). Libera a GPU1.
+# Desliga o Robô Pegasus: API, vLLM e busca (a API para primeiro). Libera a GPU1.
 # Instalação: ln -s "$PWD/servidor/scripts/pegasus-desligar" ~/.local/bin/pegasus-desligar
-systemctl --user stop pegasus-api pegasus-llm && echo "Pegasus desligado (API e vLLM), GPU1 liberada."
+systemctl --user stop pegasus-api pegasus-llm pegasus-busca &&
+    echo "Pegasus desligado (API, vLLM e busca), GPU1 liberada."

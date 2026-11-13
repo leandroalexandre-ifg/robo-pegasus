@@ -1,0 +1,46 @@
+# SearXNG do Robô Pegasus: só para a ferramenta busca_web do servidor.
+# Escuta apenas em 127.0.0.1:8104 (ver systemd/pegasus-busca.service).
+# A secret_key vem de SEARXNG_SECRET, em ~/.config/robo-pegasus/searxng.env (modo 600).
+use_default_settings:
+  engines:
+    keep_only: [duckduckgo, brave, bing, wikipedia]
+
+general:
+  instance_name: "Pegasus"
+  enable_metrics: false
+
+search:
+  safe_search: 2  # estrito; o servidor também envia safesearch=2 em cada pedido
+  autocomplete: ""
+  default_lang: "pt-BR"
+  formats: [json]  # nada de HTML: só a API usada pelo servidor
+  ban_time_on_fail: 30
+  max_ban_time_on_fail: 300
+
+server:
+  bind_address: "0.0.0.0"  # dentro do contêiner; fora, o Docker publica só em 127.0.0.1
+  port: 8080
+  limiter: false  # uso só local; o servidor limita a frequência das buscas
+  public_instance: false
+  image_proxy: false
+  method: "GET"
+
+ui:
+  query_in_title: false
+
+outgoing:
+  request_timeout: 2.0
+  max_request_timeout: 2.5
+  pool_connections: 20
+  pool_maxsize: 10
+
+engines:
+  - name: bing
+    engine: bing
+    shortcut: bi
+    disabled: false
+  - name: wikipedia
+    engine: wikipedia
+    shortcut: wp
+    display_type: ["list"]  # resultado normal, não infobox
+    categories: [general]

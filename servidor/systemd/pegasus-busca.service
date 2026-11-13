@@ -1,0 +1,28 @@
+# Robô Pegasus: SearXNG (busca_web), em Docker, só em 127.0.0.1:8104. Sem GPU.
+# Unidade do systemd --user, sem [Install]: não inicia com o sistema.
+# Instalação: cp servidor/systemd/pegasus-busca.service ~/.config/systemd/user/
+#             systemctl --user daemon-reload
+# Segredo: ~/.config/robo-pegasus/searxng.env (modo 600) com SEARXNG_SECRET=...
+# Ligado e desligado junto com o resto por pegasus-ligar e pegasus-desligar.
+[Unit]
+Description=Robô Pegasus - busca (SearXNG em Docker)
+StartLimitIntervalSec=600
+StartLimitBurst=3
+
+[Service]
+# Imagem fixada pelo digest (tag 2026.11.9-57ff753ad). Para atualizar, troque aqui.
+Environment=IMAGEM=searxng/searxng@sha256:287af61f1a13e86d02974fcde91a3413a9945788de38b61ffbc491d81a19bcc2
+ExecStartPre=-/usr/bin/docker rm -f pegasus-searxng
+ExecStart=/usr/bin/docker run --rm --name pegasus-searxng \
+    --publish 127.0.0.1:8104:8080 \
+    --env-file %h/.config/robo-pegasus/searxng.env \
+    --volume /data/projects/leandro/robo-pegasus/servidor/searxng/settings.yml:/etc/searxng/settings.yml:ro \
+    --user 977:977 --read-only \
+    --tmpfs /tmp:size=64m --tmpfs /var/cache/searxng:size=64m,uid=977,gid=977 \
+    --cap-drop ALL --security-opt no-new-privileges \
+    --memory 512m --cpus 1 --pids-limit 256 \
+    --log-driver none \
+    ${IMAGEM}
+ExecStop=/usr/bin/docker stop --time 10 pegasus-searxng
+Restart=on-failure
+RestartSec=15

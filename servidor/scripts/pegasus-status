@@ -1,5 +1,5 @@
 #!/bin/bash
-# Estado do Robô Pegasus: serviços, vLLM, API, GPU1 e turnos do dia.
+# Estado do Robô Pegasus: serviços, vLLM, API, busca, GPU1 e turnos do dia.
 # Não mostra segredos: do pegasus.env lê só as portas e a pasta de log.
 # Instalação: ln -s "$PWD/servidor/scripts/pegasus-status" ~/.local/bin/pegasus-status
 # Sai com 0 se o vLLM e a API respondem; 1 caso contrário.
@@ -22,13 +22,13 @@ codigo=0
 titulo() { printf '\n\033[1m== %s ==\033[0m\n' "$1"; }
 
 titulo "Serviços (systemd --user)"
-for unidade in pegasus-llm pegasus-api; do
+for unidade in pegasus-llm pegasus-api pegasus-busca; do
     declare -A p=()
     while IFS='=' read -r chave valor; do
         p[$chave]=$valor
     done < <(systemctl --user show "$unidade" \
         --property=ActiveState,SubState,UnitFileState,NRestarts,ActiveEnterTimestamp 2>/dev/null)
-    printf '%-12s %-8s %-11s início com o sistema: %-10s reinícios: %-3s desde: %s\n' \
+    printf '%-13s %-8s %-11s início com o sistema: %-10s reinícios: %-3s desde: %s\n' \
         "$unidade" "${p[ActiveState]:-?}" "(${p[SubState]:-?})" "${p[UnitFileState]:-transitória}" \
         "${p[NRestarts]:-0}" "${p[ActiveEnterTimestamp]:-—}"
     unset p
@@ -68,6 +68,15 @@ else
         echo "responde, mas sem /status (HTTP $http): versão antiga? reinicie a API"
     fi
     codigo=1
+fi
+
+titulo "Busca (SearXNG em 127.0.0.1:8104)"
+# Só informa: sem a busca, o robô funciona e diz que não conseguiu consultar.
+if t=$(curl -s -o /dev/null -m 5 -w '%{http_code} %{time_total}' \
+        "http://127.0.0.1:8104/search?q=teste&format=json&safesearch=2") && [ "${t%% *}" = 200 ]; then
+    echo "responde (busca de teste em ${t#* } s)"
+else
+    echo "não responde: busca_web fica indisponível"
 fi
 
 titulo "GPU$GPU"
