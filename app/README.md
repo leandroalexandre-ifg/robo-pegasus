@@ -10,7 +10,7 @@ App Flutter (só Android) que mostra o rosto do robô e conversa com o servidor 
 | ouvindo | verde | olhos mais abertos, olhar para a frente |
 | pensando | âmbar | olhos apertados, olhar para cima e para o lado |
 | falando | roxo | a boca segue o volume (RMS) da voz, com ~50 ms de atraso |
-| desconectado | cinza | olhos fechados, dormindo |
+| desconectado | cinza | olhos fechados, dormindo ; também quando o servidor avisa que o servidor de linguagem está fora do ar |
 
 Emoções (mensagem `emotion`): `neutro`, `feliz` (olhos em meia-lua, sorriso), `triste` (pálpebras caídas por fora, boca para baixo), `surpreso` (olhos grandes, boca em "O"), `pensativo` (olhar para cima, cabeça inclinada) e `bravo` (pálpebras baixas do lado do nariz). A emoção volta a `neutro` num novo `listen_start` ou 10 s depois do ocioso.
 
@@ -24,7 +24,9 @@ Emoções (mensagem `emotion`): `neutro`, `feliz` (olhos em meia-lua, sorriso), 
 O modo vem do servidor (`PEGASUS_ATIVACAO`, campo `activation` do `hello`); o app não tem configuração própria para isso.
 
 - **`toque`** (padrão): como acima.
-- **`palavra`:** o microfone fica aberto o tempo todo e o servidor espera o nome: "Pegasus, que horas são?" já é a pergunta; só "Pegasus" faz o robô responder "Oi?" e ouvir a próxima fala. Outras falas são descartadas pelo servidor. Com o rosto ocioso, um **pontinho verde** pulsando abaixo da boca indica que ele está ouvindo à espera do nome.
+- **`palavra`:** o microfone fica aberto o tempo todo e o servidor espera o nome: "Pegasus, que horas são?" já é a pergunta; só "Pegasus" faz o robô responder "Oi?" e ouvir a próxima fala. Outras falas são descartadas pelo servidor. O rosto mostra a diferença:
+  - **Esperando o nome** (azul): rosto relaxado, pálpebras um pouco baixas, olhar vagueando devagar e um **pontinho verde** pulsando abaixo da boca.
+  - **Conversando** (verde ao ouvir, depois âmbar e roxo): ao ouvir o nome, os olhos se abrem rapidamente e o rosto fica atento, com olhos mais abertos e o olhar parado em quem fala, até o fim da resposta.
 - O toque continua valendo nos dois modos.
 - Meio-duplex no modo `palavra`: o microfone fecha no primeiro `tts_start` e só reabre depois de tocar todo o áudio recebido, com 250 ms de folga, para o robô não ouvir a própria voz.
 
