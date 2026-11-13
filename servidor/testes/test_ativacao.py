@@ -1,5 +1,6 @@
 import pytest
 
+from app.pipeline import ativacao
 from app.pipeline.ativacao import e_ativacao, pergunta
 
 
@@ -56,3 +57,38 @@ def test_variacoes_proximas(palavra):
 @pytest.mark.parametrize("palavra", ["pegas", "pega", "pegasse", "pegamos", "gás"])
 def test_palavras_comuns_nao_ativam(palavra):
     assert not e_ativacao(palavra)
+
+
+@pytest.mark.parametrize(
+    "texto",
+    [
+        "Tchau, Pegasus!",
+        "Obrigado, é só isso.",
+        "Ok, obrigado, tchau.",
+        "Tchau tchau.",
+        "Até logo, Pégasus.",
+        "Valeu, até mais!",
+        "É só isso, obrigada.",
+        "Pegasus, pode descansar.",
+        "TCHAU",
+    ],
+)
+def test_despedidas_encerram(texto):
+    assert ativacao.encerra(texto)
+
+
+@pytest.mark.parametrize(
+    "texto",
+    [
+        "Tchau, mas antes me diz uma coisa.",
+        "Obrigado.",
+        "Obrigado pela resposta, e o sol?",
+        "Só isso mesmo?",
+        "Como se diz tchau em inglês?",
+        "Pegasus",
+        "ok",
+        "",
+    ],
+)
+def test_outras_falas_nao_encerram(texto):
+    assert not ativacao.encerra(texto)
