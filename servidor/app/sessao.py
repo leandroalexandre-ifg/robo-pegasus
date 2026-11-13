@@ -39,6 +39,10 @@ POS_FALA_S = 0.2
 VIGIA_GUARDA_S = 1.0
 _VIGIA_LIMITE_BYTES = round(2 * VIGIA_GUARDA_S * TAXA_ENTRADA) * 2
 SAUDACAO = "Oi?"  # resposta a uma fala que é só a palavra de ativação
+# Uma fala da escuta contínua mais longa que isso não é um chamado (ruído ou conversa
+# da sala) e é descartada sem transcrever: o Whisper fica lento e inventa texto com
+# ruído longo.
+MAX_FALA_PALAVRA_S = 10
 
 
 def _amostras(pcm: bytes) -> np.ndarray:
@@ -194,9 +198,12 @@ class Sessao:
         if self._vad is None:
             self._limpar_audio()
             self._vad = DetectorFala(self.config)
-        self._audio += dados[: _MAX_BYTES - len(self._audio)]
+        self._audio += dados
         evento = self._vad.processar(dados)
-        if evento == "fim" or len(self._audio) >= _MAX_BYTES:
+        if self._vad.fala_s > MAX_FALA_PALAVRA_S:
+            self._limpar_audio()  # o próximo áudio começa um detector novo
+            return
+        if evento == "fim":
             pcm, turno = self._fechar_fala("ativacao")
             # Uma verificação de cada vez, na ordem das falas: a nova espera a anterior,
             # e cancelar a nova (abort, listen_start) cancela a anterior junto.

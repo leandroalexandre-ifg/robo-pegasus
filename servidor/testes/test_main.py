@@ -252,6 +252,10 @@ class _DetectorFalso:
     def silencio_s(self):
         return 0.0 if self.fim is None else self._amostras / 16_000 - self._fim_s
 
+    @property
+    def fala_s(self):
+        return 0.0 if self.inicio is None else self._amostras / 16_000 - self._inicio_s
+
     def processar(self, pcm):
         if self.terminou:
             return None
@@ -516,6 +520,18 @@ def test_silencio_longo_antes_da_fala_nao_acumula_audio(escuta_continua, pipelin
         assert ws.receive_json() == {"type": "state", "state": "pensando"}
     # só a fala e as margens, mesmo depois de 6 s de silêncio guardado e cortado
     assert pipeline["transcritos"] == [pytest.approx(1.5)]
+
+
+def test_fala_longa_na_escuta_continua_e_descartada_sem_transcrever(
+    escuta_continua, pipeline, monkeypatch
+):
+    monkeypatch.setattr(_DetectorFalso, "roteiro", (0.5, 12.0, 12.6))  # 11,5 s de fala
+    pipeline["falas"].append("Pegasus, ruído da sala")
+    with escuta_continua.websocket_connect("/ws") as ws:
+        _conectar_continuo(ws)
+        _enviar_audio(ws, 13.0)  # sem o limite, o fim seria decidido aos 12,6 s
+        _nada_mais_foi_enviado(ws)
+    assert pipeline["transcritos"] == []
 
 
 def _registros(pipeline):
