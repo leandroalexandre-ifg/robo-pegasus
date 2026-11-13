@@ -132,13 +132,15 @@ async def _texto_limpo[T](fluxo: AsyncIterator[str | T]) -> AsyncIterator[str | 
             yield pedaco
 
 
-def _resultado_das_chamadas(chamadas: dict[int, dict], resultados: dict[int, str]) -> list[dict]:
+def _resultado_das_chamadas(
+    chamadas: dict[int, dict], resultados: dict[int, str], dito: str = ""
+) -> list[dict]:
     """Mensagens que devolvem ao modelo as chamadas que ele fez e os resultados
     ("ok" para definir_emocao; erro para uma ferramenta que não está ligada)."""
     ids = {i: c["id"] or f"chamada-{i}" for i, c in chamadas.items()}
     assistente = {
         "role": "assistant",
-        "content": None,
+        "content": dito or None,
         "tool_calls": [
             {
                 "id": ids[i],
@@ -232,25 +234,19 @@ async def gerar(
         return
 
     chamadas: dict[int, dict] = {}
-    falou = False
+    dito: list[str] = []
     async for pedaco in _texto_limpo(
         _fluxo(cliente, modelo, mensagens, config, chamadas, oferecidas)
     ):
         if isinstance(pedaco, str):
-            falou = falou or bool(_TEM_TEXTO.search(pedaco))
+            dito.append(pedaco)
         yield pedaco
+    falou = bool(_TEM_TEXTO.search("".join(dito)))
     for emocao in _emocoes(chamadas, rede):
         yield emocao
 
     consultar = {i: c for i, c in chamadas.items() if c["nome"] in rede}
-    if consultar and falou:
-        # Respondeu de memória e só depois pediu a consulta: a resposta já foi dita, e
-        # consultar agora faria o robô repetir a mesma coisa citando a fonte.
-        log.info(
-            "o LLM respondeu antes de chamar %s; consulta ignorada",
-            consultar[min(consultar)]["nome"],
-        )
-    elif consultar:
+    if consultar:
         consultas = await ferramentas_rede.executar(
             [(c["nome"], c["args"]) for c in consultar.values()], config
         )
@@ -259,7 +255,9 @@ async def gerar(
         resultados = dict(zip(consultar, (c.texto for c in consultas), strict=False))
         for i in list(consultar)[len(consultas) :]:  # além do máximo por turno
             resultados[i] = '{"erro": "uma consulta por vez"}'
-        mensagens += _resultado_das_chamadas(chamadas, resultados)
+        # O que já foi dito antes da chamada ("Vou verificar.") volta ao modelo como
+        # parte da mensagem dele, para a continuação não repetir nem contradizer.
+        mensagens += _resultado_das_chamadas(chamadas, resultados, "".join(dito).strip())
         async for pedaco in _depois_das_consultas(cliente, modelo, mensagens, config, consultas):
             yield pedaco
     elif chamadas and not falou:

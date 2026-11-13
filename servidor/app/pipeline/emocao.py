@@ -105,6 +105,7 @@ _LIMPEZA = [
     re.compile(r"\{[^{}]*\}"),  # objetos JSON
     re.compile(r"</?[a-zA-Z_][^<>]*>"),  # outras marcações <...>
     re.compile(rf"[\[(]\s*(?:emo[cç][aã]o\s*:\s*)?(?:{_NOMES})\s*[\])]", re.I),  # [feliz] (triste)
+    re.compile(r"\b(?:https?://|www\.)\S+", re.I),  # endereços vindos das buscas
     re.compile(r"\*[^*\n]{1,40}\*"),  # ações entre asteriscos: *sorri*
     re.compile(r"[*_`#~>|]+"),  # símbolos de markdown
     re.compile(r"^\s*[-•]\s+", re.M),  # marcadores de lista

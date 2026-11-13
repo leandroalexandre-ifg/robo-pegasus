@@ -338,12 +338,16 @@ def test_modo_antes_emocao_e_consulta_na_mesma_rodada(cliente, consultas):
     assert [m["content"] for m in ferramentas] == ["ok", "Verbete X: dados."]
 
 
-def test_texto_antes_da_chamada_de_rede_dispensa_a_consulta(cliente, consultas):
-    from app.ferramentas import Espera
-
+def test_texto_antes_da_chamada_de_rede_volta_ao_modelo(cliente, consultas):
     respostas, pedidos = cliente
-    respostas.append(_Fluxo([_texto("Foi a Argentina."), _chamada("busca_web", "{}")]))
+    consultas[1].append([_consulta("busca_web", fonte="uma busca na internet")])
+    respostas.append(_Fluxo([_texto("Vou verificar."), _chamada("busca_web", "{}")]))
+    respostas.append(_Fluxo([_texto(" foi 2 a 1.")]))
     itens = _gerar_com()
-    assert [x for x in itens if isinstance(x, str)] == ["Foi a Argentina."]
-    assert Espera("busca_web") in itens  # o turno não toca a espera depois de falar
-    assert consultas[0] == [] and len(pedidos) == 1
+    assert [x for x in itens if isinstance(x, str)] == [
+        "Vou verificar.",
+        "Segundo uma busca na internet,",
+        " foi 2 a 1.",
+    ]
+    chamada = pedidos[1]["messages"][-3]
+    assert chamada["content"] == "Vou verificar." and chamada["tool_calls"]
