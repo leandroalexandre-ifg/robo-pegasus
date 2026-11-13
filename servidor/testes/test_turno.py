@@ -47,29 +47,43 @@ def _rodar(t, **ambiente):
     return asyncio.run(coletar())
 
 
-def test_emocao_e_depois_um_bloco_por_frase(monkeypatch):
+def _frases(itens):
+    return [i.frase for i in itens if isinstance(i, turno.BlocoAudio)]
+
+
+def _emocoes(itens):
+    return [i for i in itens if isinstance(i, Emocao)]
+
+
+def test_uma_emocao_e_um_bloco_por_frase(monkeypatch):
     sintetizadas, pedidos = _falsos(
         monkeypatch, "qual é o seu nome?", ["Olá! Meu ", "nome é Pegasus."]
     )
     t = turno.Turno()
     itens = _rodar(t)
-    assert itens[0] == Emocao("feliz")
-    blocos = itens[1:]
-    assert [b.frase for b in blocos] == ["Olá!", "Meu nome é Pegasus."]
+    assert _emocoes(itens) == [Emocao("feliz")]
+    assert _frases(itens) == ["Olá!", "Meu nome é Pegasus."]
     assert sintetizadas == ["Olá!", "Meu nome é Pegasus."]
-    assert blocos[0].taxa == 22_050
+    assert {b.taxa for b in itens if isinstance(b, turno.BlocoAudio)} == {22_050}
     assert pedidos == ["qual é o seu nome?"]
     assert t.texto_usuario == "qual é o seu nome?"
     assert t.resposta == "Olá! Meu nome é Pegasus."
     assert t.emocoes == ["feliz"]
 
 
+def test_primeira_frase_corta_na_virgula(monkeypatch):
+    _falsos(monkeypatch, "o que é o sol?", ["Olha, o sol é ", "uma estrela, bem grande. Fim."])
+    t = turno.Turno()
+    assert _frases(_rodar(t)) == ["Olha,", "o sol é uma estrela, bem grande.", "Fim."]
+    assert t.resposta == "Olha, o sol é uma estrela, bem grande. Fim."
+
+
 def test_tempos_em_ordem(monkeypatch):
     _falsos(monkeypatch, "oi", ["Oi! ", "Tudo bem?"])
     t = turno.Turno()
     _rodar(t)
-    assert t.tempos["stt"] <= t.tempos["llm_primeira_frase"] <= t.tempos["emocao"]
-    assert t.tempos["emocao_llm"] <= t.tempos["emocao"] <= t.tempos["primeiro_audio"]
+    assert t.tempos["stt"] <= t.tempos["llm_primeira_frase"] <= t.tempos["primeiro_audio"]
+    assert t.tempos["emocao_llm"] <= t.tempos["emocao"]
     assert t.tempos["primeiro_audio"] <= t.tempos["llm_fim"] <= t.tempos["fim"]
 
 
@@ -84,7 +98,7 @@ def test_sem_fala_nao_responde(monkeypatch):
 def test_sem_emocao_valida_usa_neutro(monkeypatch):
     _falsos(monkeypatch, "oi", ["Oi."], emocao=None)
     t = turno.Turno()
-    assert _rodar(t)[0] == Emocao("neutro")
+    assert _emocoes(_rodar(t)) == [Emocao("neutro")]
     assert t.emocoes == ["neutro"]
 
 
@@ -92,17 +106,28 @@ def test_falha_na_emocao_usa_neutro(monkeypatch):
     _falsos(monkeypatch, "oi", ["Oi."], emocao=RuntimeError("vLLM caiu"))
     t = turno.Turno()
     itens = _rodar(t)
-    assert itens[0] == Emocao("neutro")
-    assert [b.frase for b in itens[1:]] == ["Oi."]
+    assert _emocoes(itens) == [Emocao("neutro")]
+    assert _frases(itens) == ["Oi."]
 
 
-def test_emocao_atrasada_usa_neutro_sem_segurar_o_audio(monkeypatch):
+def test_primeiro_audio_nao_espera_a_emocao(monkeypatch):
+    _falsos(monkeypatch, "oi", ["Oi.", " Tchau."], emocao=Emocao("triste"), atraso_emocao=0.2)
+    t = turno.Turno()
+    itens = _rodar(t)
+    # O áudio sai na hora; a emoção chega depois, dentro do prazo, e vai assim mesmo.
+    assert isinstance(itens[0], turno.BlocoAudio)
+    assert _emocoes(itens) == [Emocao("triste")]
+    assert t.tempos["primeiro_audio"] < 0.1 < t.tempos["emocao"]
+    assert t.emocoes == ["triste"]
+
+
+def test_emocao_fora_do_prazo_vira_neutro(monkeypatch):
     _falsos(monkeypatch, "oi", ["Oi.", " Tchau."], emocao=Emocao("triste"), atraso_emocao=5)
     t = turno.Turno()
     itens = _rodar(t, PEGASUS_EMOCAO_ESPERA_MS="50")
-    assert itens[0] == Emocao("neutro")
-    assert [i for i in itens if isinstance(i, Emocao)] == [Emocao("neutro")]  # a atrasada não vem
-    assert t.tempos["primeiro_audio"] < 1
+    assert _emocoes(itens) == [Emocao("neutro")]  # a atrasada não vem
+    assert _frases(itens) == ["Oi.", "Tchau."]
+    assert t.tempos["fim"] < 1
     assert "emocao_llm" not in t.tempos
 
 
@@ -112,7 +137,7 @@ def test_marcacoes_nao_chegam_a_voz(monkeypatch):
     )
     t = turno.Turno()
     itens = _rodar(t)
-    assert [b.frase for b in itens[1:]] == ["Que legal!", "Parabéns."]
+    assert _frases(itens) == ["Que legal!", "Parabéns."]
     assert sintetizadas == ["Que legal!", "Parabéns."]
 
 
@@ -128,7 +153,7 @@ def test_antes_emocao_do_fluxo_sai_primeiro_sem_requisicao_paralela(monkeypatch)
     assert [b.frase for b in itens[1:]] == ["Uau!", "Parabéns."]
     assert pedidos == []  # sem requisição paralela
     assert t.emocoes == ["surpreso"]
-    assert t.tempos["emocao_llm"] <= t.tempos["emocao"] <= t.tempos["primeiro_audio"]
+    assert t.tempos["emocao_llm"] <= t.tempos["primeiro_audio"]
 
 
 def test_antes_sem_chamada_usa_neutro_antes_do_audio(monkeypatch):

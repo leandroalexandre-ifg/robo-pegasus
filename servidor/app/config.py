@@ -20,7 +20,7 @@ class Config:
     llm_temperatura: float
     emocao_modo: str  # "antes": a fala chama a ferramenta; "paralelo": requisição própria
     memoria_turnos: int  # turnos anteriores da sessão enviados ao LLM
-    emocao_espera_s: float  # quanto o primeiro áudio pode esperar pela emoção (paralelo)
+    emocao_espera_s: float  # prazo da emoção depois do primeiro áudio (paralelo); depois, neutro
 
     # Whisper (faster-whisper)
     whisper_modelo: str

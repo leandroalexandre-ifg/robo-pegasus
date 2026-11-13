@@ -40,7 +40,7 @@ Tablet                                   Servidor
   │                                        │   o VAD detecta o fim da fala
   │ ◄──────────────── state "pensando" ─── │   (ou o tablet envia listen_stop)
   │ ◄────────────────────── stt {text} ─── │
-  │ ◄──────────── emotion {"feliz"} ────── │   uma por turno, antes do 1º áudio
+  │ ◄──────────── emotion {"feliz"} ────── │   uma por turno; pode vir já no meio da fala
   │ ◄───────────────── state "falando" ─── │
   │ ◄─────────────── tts_start {frase} ─── │   ┐
   │ ◄══════════════ áudio PCM da frase ═══ │   │ uma vez por frase
@@ -245,11 +245,11 @@ O que já foi falado fica na memória da sessão. Um envio ao tablet travado por
 
 Emoção a sobrepor ao estado do rosto durante a resposta. Valores: `neutro`, `feliz`, `triste`, `surpreso`, `pensativo`, `bravo`.
 
-- **Uma por turno com resposta, sempre antes do primeiro áudio:** chega depois de `stt` e antes de `state "falando"` e do primeiro `tts_start`. O app pode aplicá-la ao rosto antes de tocar qualquer som.
+- **Uma por turno com resposta, assim que fica pronta:** chega depois de `stt`, antes ou durante a fala. O primeiro áudio não espera por ela. No modo `antes`, ela vem antes do primeiro `tts_start`. No modo `paralelo`, costuma chegar enquanto a primeira frase toca, entre o `tts_end` de uma frase e o `tts_start` da seguinte. O app a aplica ao rosto na hora, com o áudio tocando.
 - **Origem:** o LLM escolhe a emoção chamando a ferramenta `definir_emocao(emocao)`. O servidor valida o valor contra a lista acima. Há dois modos (`PEGASUS_EMOCAO_MODO`):
   - `antes` (padrão): a própria requisição da fala oferece a ferramenta e o prompt pede que ela seja chamada antes de qualquer palavra da resposta.
   - `paralelo`: uma requisição própria, em paralelo com a fala, obriga a chamada.
-- **Valor padrão:** o servidor envia `neutro` quando o LLM não chama a ferramenta, devolve um valor fora da lista ou falha. No modo `antes`, isso acontece se a primeira frase ficar pronta sem que a ferramenta tenha sido chamada; no modo `paralelo`, se a emoção não chegar em até `PEGASUS_EMOCAO_ESPERA_MS` (padrão 1000 ms) depois da primeira frase pronta. Uma emoção que chegue depois disso é descartada.
+- **Valor padrão:** o servidor envia `neutro` quando o LLM não chama a ferramenta, devolve um valor fora da lista ou falha. No modo `antes`, isso acontece se a primeira frase ficar pronta sem que a ferramenta tenha sido chamada; no modo `paralelo`, se a emoção não chegar em até `PEGASUS_EMOCAO_ESPERA_MS` (padrão 1000 ms) depois do primeiro áudio. Uma emoção que chegue depois disso é descartada.
 - **Duração:** a emoção vale até o próximo `listen_start` ou até 10 s depois de o rosto voltar a `ocioso` com o áudio da resposta já tocado; então o rosto volta a `neutro`. O app não zera a emoção no próprio `state "ocioso"` porque o áudio da resposta ainda está tocando nesse momento (o servidor envia mais rápido do que toca). Turnos sem resposta (`stt` vazio, `error`, `abort` antes do primeiro áudio) e o "Oi?" da palavra de ativação não têm `emotion`.
 - **Texto limpo:** o texto de `tts_start` e o áudio nunca contêm marcações de emoção nem de ferramenta. O servidor encerra a fala na primeira imitação de chamada escrita pelo LLM (`<tool_call>`, `definir_emocao(...)`, `{"emocao": ...}`) e remove marcas como `[feliz]` ou `*sorri*`, emojis e símbolos de markdown antes da síntese.
 
