@@ -17,7 +17,7 @@ DEFINICAO = {
     "type": "function",
     "function": {
         "name": "busca_web",
-        "description": "Busca na internet notícias, resultados de jogos e fatos recentes.",
+        "description": "Busca na internet (notícias e fatos recentes).",
         "parameters": {
             "type": "object",
             "properties": {"consulta": {"type": "string"}},

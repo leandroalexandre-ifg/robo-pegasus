@@ -14,8 +14,7 @@ DEFINICAO = {
     "type": "function",
     "function": {
         "name": "wikipedia",
-        "description": "Resumo de um verbete da Wikipédia em português (pessoas, lugares, "
-        "conceitos, história).",
+        "description": "Resumo de um verbete da Wikipédia.",
         "parameters": {
             "type": "object",
             "properties": {"assunto": {"type": "string"}},

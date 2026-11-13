@@ -15,13 +15,8 @@ DEFINICAO = {
     "type": "function",
     "function": {
         "name": "clima",
-        "description": "Tempo agora e previsão para hoje, amanhã e depois de amanhã numa cidade.",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "cidade": {"type": "string", "description": "Omita para a cidade do robô."}
-            },
-        },
+        "description": "Tempo agora e previsão de 3 dias. Sem cidade: a do robô.",
+        "parameters": {"type": "object", "properties": {"cidade": {"type": "string"}}},
     },
 }
 

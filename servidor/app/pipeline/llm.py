@@ -280,7 +280,9 @@ async def escolher_emocao(
     cliente, modelo = await _preparar(config)
     resposta = await cliente.chat.completions.create(
         model=modelo,
-        messages=_mensagens(_fala_atual(texto_usuario, config), _sistema(config), historico),
+        # Sem o "[agora: …]": a emoção não depende dele, e o prompt menor pesa menos na
+        # GPU enquanto a fala é gerada ao mesmo tempo.
+        messages=_mensagens(texto_usuario, persona.prompt_sistema(config), historico),
         tools=[FERRAMENTA],
         tool_choice={"type": "function", "function": {"name": FERRAMENTA["function"]["name"]}},
         # O Qwen3.8 escreve a chamada no formato XML: ~32 tokens.
