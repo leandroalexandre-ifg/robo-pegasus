@@ -22,3 +22,8 @@ dev_dependencies:
 
 flutter:
   uses-material-design: true
+
+  assets:
+    # Raiz da CA interna (Caddy) que assina o certificado do wss:// do
+    # servidor; a mesma do SciTech Ear. Só o certificado público.
+    - assets/certs/scitechear-root-ca.crt
