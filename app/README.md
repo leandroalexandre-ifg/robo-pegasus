@@ -57,13 +57,26 @@ Durante o desenvolvimento, o tablet chega ao servidor por um túnel aberto no Ma
 ssh -N -L 0.0.0.0:8000:localhost:8100 USUARIO@SERVIDOR_NUMBERS
 ```
 
+O app usa `ws://IP_DO_MAC:8000/ws`, sem TLS.
+
+### wss:// (produção)
+
+Para o acesso definitivo, o app também aceita `wss://`, com certificado da CA interna do servidor (o Caddy com `tls internal`, a mesma CA do SciTech Ear). Basta pôr o endereço `wss://…/ws` no toque longo ou em `PEGASUS_URL`.
+
+- A raiz da CA fica embutida em `assets/certs/scitechear-root-ca.crt` (cópia de `deploy/scitechear-root-ca.crt` do SciTech Ear; só o certificado público).
+- `lib/conexao/tls.dart` monta um `SecurityContext(withTrustedRoots: true)` com `setTrustedCertificatesBytes` em `main()`, e cada conexão leva um `HttpClient` com esse contexto no `customClient` do `IOWebSocketChannel.connect`. As raízes públicas continuam valendo.
+- Instalar a CA no Android não adiantaria: o `dart:io` usa o próprio conjunto de raízes, não o do sistema.
+- Se o certificado não fecha com a CA, a legenda mostra "Certificado do servidor não aceito".
+- Quando a CA for trocada (vale até 2036), substitua o arquivo e gere o app de novo.
+
 ## Estrutura
 
 ```
 lib/
   main.dart             tela única, tela cheia e paisagem
   robo.dart             junta conexão, microfone e alto-falante; decide o estado
-  conexao/              protocolo v1 e cliente WebSocket com reconexão
+  conexao/              protocolo v1, cliente WebSocket com reconexão e
+                        confiança TLS (CA interna) para o wss://
   audio/                captura em blocos de 20 ms, reprodução PCM em fluxo
                         e envelope de volume para a boca
   demo.dart             modo de demonstração (PEGASUS_DEMO)
