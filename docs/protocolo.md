@@ -133,8 +133,8 @@ Primeira mensagem da conexão, obrigatória em até 5 s.
 }
 ```
 
-- `token`: um dos valores de `PEGASUS_TOKENS` no `pegasus.env` do servidor (separados por vírgula).
-- `device_id`: identificação livre do tablet, usada nos registros.
+- `token`: o token deste tablet. Cada tablet tem o seu, em `PEGASUS_TABLETS` no `pegasus.env` do servidor (`nome:token,nome:token`). O token é aleatório, com pelo menos 32 caracteres de base64 para URL; o servidor não sobe com um token curto ou repetido. Para gerar: `python -m scripts.tokens adicionar NOME`. A comparação é feita em tempo constante.
+- `device_id`: informativo. O servidor identifica o tablet pelo token, e é esse nome que aparece nos registros.
 - `audio`: formato que o tablet vai enviar; na versão 1 só `pcm_s16le`, 16 kHz, mono.
 
 ### `listen_start`

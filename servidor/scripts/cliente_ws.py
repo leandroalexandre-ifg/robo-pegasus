@@ -13,7 +13,7 @@ só o áudio, como um microfone sempre aberto. Cada WAV é uma fala; uma fala se
 "Pegasus" não recebe resposta nenhuma ("descartada").
 
 Vários WAVs são turnos da mesma conexão (a memória da sessão vale entre eles).
-O token vem de PEGASUS_TOKEN ou, na falta dele, do primeiro de PEGASUS_TOKENS.
+O token vem de PEGASUS_TOKEN ou, na falta dele, do tablet teste-* de PEGASUS_TABLETS.
 """
 
 import argparse
@@ -28,6 +28,7 @@ from websockets.asyncio.client import connect
 from websockets.exceptions import ConnectionClosed
 
 from app.wav import escrever_wav, ler_wav
+from scripts import tokens
 
 BLOCO_ENTRADA = 640  # 20 ms de PCM 16 kHz, 16 bits
 SILENCIO_APOS_FALA_S = 3.0  # modo --vad: silêncio enviado depois da fala, até o servidor decidir
@@ -38,9 +39,9 @@ def ms(segundos: float | None) -> str:
 
 
 def ler_token() -> str:
-    token = os.environ.get("PEGASUS_TOKEN") or os.environ.get("PEGASUS_TOKENS", "").split(",")[0]
+    token = os.environ.get("PEGASUS_TOKEN") or next(iter(tokens.de_teste()), "")
     if not token.strip():
-        sys.exit("Defina PEGASUS_TOKEN ou PEGASUS_TOKENS (carregue o pegasus.env).")
+        sys.exit("Defina PEGASUS_TOKEN ou crie um tablet teste-1 (python -m scripts.tokens).")
     return token.strip()
 
 

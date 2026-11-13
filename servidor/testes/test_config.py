@@ -34,15 +34,18 @@ def test_sobrescreve_pelo_ambiente():
     assert c.whisper_prompt is None
 
 
-def test_servidor_e_tokens():
-    c = carregar_config({"PEGASUS_TOKENS": " abc , def,, "})
+SEGREDO = "segredo-tablet-ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+
+
+def test_servidor_e_tablets():
+    c = carregar_config({"PEGASUS_TABLETS": f" sala-01 : {SEGREDO} ,, "})
     assert (c.api_host, c.api_porta) == ("127.0.0.1", 8100)
-    assert c.tokens == frozenset({"abc", "def"})
-    assert carregar_config({}).tokens == frozenset()
+    assert c.tablets == (("sala-01", SEGREDO),)
+    assert carregar_config({}).tablets == ()
 
 
 def test_segredos_fora_do_repr():
-    c = carregar_config({"PEGASUS_TOKENS": "segredo-tablet", "PEGASUS_LLM_CHAVE": "segredo-llm"})
+    c = carregar_config({"PEGASUS_TABLETS": f"t1:{SEGREDO}", "PEGASUS_LLM_CHAVE": "segredo-llm"})
     assert "segredo" not in repr(c)
 
 
@@ -63,7 +66,7 @@ def test_modo_da_ativacao():
 def test_resumo_publico_sem_segredos():
     c = carregar_config(
         {
-            "PEGASUS_TOKENS": "segredo-tablet",
+            "PEGASUS_TABLETS": f"t1:{SEGREDO}",
             "PEGASUS_LLM_CHAVE": "segredo-llm",
             "PEGASUS_MODELO": "qwen-teste",
             "PEGASUS_EMOCAO_MODO": "paralelo",
@@ -72,6 +75,7 @@ def test_resumo_publico_sem_segredos():
     resumo = resumo_publico(c)
     assert resumo == {
         "ativacao": "toque",
+        "tablets": ["t1"],
         "conversa_s": 8.0,
         "emocao_modo": "paralelo",
         "llm_modelo": "qwen-teste",

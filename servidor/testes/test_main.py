@@ -13,7 +13,8 @@ from app import sessao as sessao_mod
 from app.pipeline import llm, stt, tts
 from app.pipeline.emocao import Emocao
 
-TOKEN = "token-de-teste"
+TOKEN = "token-de-teste-AbCdEfGhIjKlMnOpQrStUvWxYz0123456789"
+OUTRO = "outro-tablet-ZyXwVuTsRqPoNmLkJiHgFeDcBa9876543210"
 TAXA = 22_050
 
 
@@ -44,7 +45,7 @@ def pipeline(monkeypatch, tmp_path):
     async def sintetizar(texto, config):
         return b"\x01\x00" * int(TAXA * 0.25), TAXA  # 250 ms → 3 blocos de até 100 ms
 
-    monkeypatch.setenv("PEGASUS_TOKENS", f"outro,{TOKEN}")
+    monkeypatch.setenv("PEGASUS_TABLETS", f"outro:{OUTRO},tablet-teste:{TOKEN}")
     monkeypatch.setenv("PEGASUS_LOG_PASTA", str(tmp_path))
     estado["llm_no_ar"] = True
 
@@ -224,7 +225,7 @@ def test_hello_recusado(cliente, primeira, codigo):
 
 
 def test_sem_tokens_configurados_recusa(monkeypatch, pipeline):
-    monkeypatch.setenv("PEGASUS_TOKENS", "")
+    monkeypatch.setenv("PEGASUS_TABLETS", "")
     with TestClient(main.app) as c, c.websocket_connect("/ws") as ws:
         ws.send_json(_hello())
         with pytest.raises(WebSocketDisconnect) as erro:
@@ -232,11 +233,15 @@ def test_sem_tokens_configurados_recusa(monkeypatch, pipeline):
     assert erro.value.code == 4001
 
 
-def test_token_valido():
-    assert main.token_valido("b", frozenset({"a", "b"}))
-    assert not main.token_valido("c", frozenset({"a", "b"}))
-    assert not main.token_valido(123, frozenset({"a"}))
-    assert not main.token_valido("a", frozenset())
+def test_o_tablet_e_quem_o_token_diz(cliente, pipeline):
+    with cliente.websocket_connect("/ws") as ws:
+        ws.send_json(_hello(token=OUTRO, device_id="tablet-teste"))  # device_id não conta
+        assert ws.receive_json()["type"] == "hello"
+        ws.receive_json()
+        _falar(ws)
+        _receber_ate_ocioso(ws)
+    [r] = _registros(pipeline)
+    assert r["tablet"] == "outro"
 
 
 def test_sem_emocao_do_llm_envia_neutro_antes_do_audio(cliente, pipeline):

@@ -9,16 +9,16 @@ Uso, a partir de servidor/:
 import asyncio
 import collections
 import contextlib
-import hmac
 import json
 import logging
+import os
 import time
 from contextlib import asynccontextmanager
 
 import numpy as np
 from fastapi import FastAPI, HTTPException, Request, WebSocket
 
-from app import persona, registro, saude
+from app import persona, registro, saude, seguranca
 from app.config import Config, carregar_config, resumo_publico
 from app.pipeline import stt, tts, vad
 from app.sessao import Sessao
@@ -58,8 +58,10 @@ async def lifespan(app: FastAPI):
     logging.getLogger("httpx").setLevel(logging.WARNING)
     config = carregar_config()
     arquivo_turnos = registro.configurar(config.log_pasta, config.log_dias)
-    if not config.tokens:
-        log.warning("PEGASUS_TOKENS vazio: todas as conexões serão recusadas.")
+    if not config.tablets:
+        log.warning("PEGASUS_TABLETS vazio: todas as conexões serão recusadas.")
+    if "PEGASUS_TOKENS" in os.environ:
+        log.warning("PEGASUS_TOKENS é ignorado: os tokens agora são por tablet (PEGASUS_TABLETS)")
     log.info("configuração: %s", json.dumps(resumo_publico(config), ensure_ascii=False))
     p = persona.carregar(config.persona_arquivo)
     log.info("turnos registrados em %s", arquivo_turnos)
@@ -117,15 +119,8 @@ async def status(request: Request) -> dict:
     }
 
 
-def token_valido(token: object, tokens: frozenset[str]) -> bool:
-    if not isinstance(token, str):
-        return False
-    # Compara com todos, em tempo constante, para não vazar qual token quase bateu.
-    return any([hmac.compare_digest(token.encode(), t.encode()) for t in tokens])
-
-
-def _validar_hello(mensagem: dict, config: Config) -> tuple[int, str] | None:
-    """Devolve (código, motivo) para fechar a conexão, ou None se o hello é válido."""
+def _validar_hello(mensagem: dict, config: Config) -> tuple[int, str] | str:
+    """Devolve o nome do tablet, se o hello é válido, ou (código, motivo) para fechar."""
     if mensagem.get("type") != "hello":
         return FECHA_PROTOCOLO, "a primeira mensagem deve ser hello"
     if mensagem.get("version") != VERSAO_PROTOCOLO:
@@ -134,9 +129,10 @@ def _validar_hello(mensagem: dict, config: Config) -> tuple[int, str] | None:
     esperado = {"format": "pcm_s16le", "sample_rate": TAXA_ENTRADA, "channels": 1}
     if any(audio.get(k, v) != v for k, v in esperado.items()):
         return FECHA_PROTOCOLO, "formato de áudio não suportado"
-    if not token_valido(mensagem.get("token"), config.tokens):
+    tablet = seguranca.identificar(mensagem.get("token"), config.tablets)
+    if tablet is None:
         return FECHA_TOKEN, "token inválido"
-    return None
+    return tablet
 
 
 async def _receber_json(ws: WebSocket, tempo_s: float) -> dict | None:
@@ -167,13 +163,15 @@ async def conexao(ws: WebSocket) -> None:
         return
     if hello is None:
         return
-    if falha := _validar_hello(hello, config):
-        log.warning("conexão recusada: %s", falha[1])
-        await ws.close(*falha)
+    tablet = _validar_hello(hello, config)
+    if isinstance(tablet, tuple):
+        log.warning("conexão recusada: %s", tablet[1])
+        await ws.close(*tablet)
         return
 
+    # O tablet é quem o token diz; o device_id do hello não identifica ninguém.
     monitor: saude.MonitorLLM = ws.app.state.monitor
-    sessao = Sessao(ws, config, str(hello.get("device_id") or "sem-id")[:64], monitor)
+    sessao = Sessao(ws, config, tablet, monitor)
     log.info("sessão %s: tablet %s conectado", sessao.id, sessao.device_id)
     await sessao.enviar_json(
         {

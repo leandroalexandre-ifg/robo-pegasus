@@ -4,6 +4,8 @@ import os
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from app.seguranca import carregar_tablets
+
 RAIZ_REPOSITORIO = Path(__file__).resolve().parents[2]
 SERVIDOR = RAIZ_REPOSITORIO / "servidor"
 MODELOS = RAIZ_REPOSITORIO / "modelos"
@@ -62,7 +64,8 @@ class Config:
     # Servidor WebSocket
     api_host: str
     api_porta: int
-    tokens: frozenset[str] = field(repr=False)  # aceitos no hello; vazio recusa todos
+    # (nome, token) de cada tablet, de PEGASUS_TABLETS; vazio recusa todos
+    tablets: tuple[tuple[str, str], ...] = field(repr=False)
 
 
 MODOS_EMOCAO = ("antes", "paralelo")
@@ -121,7 +124,7 @@ def carregar_config(ambiente: dict[str, str] | None = None) -> Config:
         ativacao=_modo_ativacao(env.get("PEGASUS_ATIVACAO", "toque")),
         api_host=env.get("PEGASUS_HOST", "127.0.0.1"),
         api_porta=int(env.get("PEGASUS_PORTA_API", "8100")),
-        tokens=frozenset(t.strip() for t in env.get("PEGASUS_TOKENS", "").split(",") if t.strip()),
+        tablets=carregar_tablets(env.get("PEGASUS_TABLETS", "")),
     )
 
 
@@ -132,6 +135,7 @@ def resumo_publico(config: Config) -> dict[str, object]:
         whisper = f"cuda (GPU{config.whisper_gpu})"
     resumo: dict[str, object] = {
         "ativacao": config.ativacao,
+        "tablets": [nome for nome, _ in config.tablets],
         "conversa_s": config.conversa_s,
         "emocao_modo": config.emocao_modo,
         "llm_modelo": config.llm_modelo or "(primeiro de /v1/models)",
