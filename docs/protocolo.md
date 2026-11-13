@@ -12,6 +12,13 @@ Este documento é a fonte da verdade do protocolo. Ao mudar o protocolo, atualiz
   - **quadros binários**: áudio PCM, sem cabeçalho.
 - Campos desconhecidos devem ser ignorados, para permitir evolução sem quebrar o outro lado.
 
+### Proteção contra abuso
+
+- **`hello` obrigatório em até 5 s:** sem ele, o servidor fecha com 4008.
+- **Bloqueio de IP:** 5 `hello` inválidos (token errado, mensagem malformada, versão ou áudio não suportados, ou `hello` que não chega em 5 s) do mesmo IP em 10 min bloqueiam esse IP por 15 min. Durante o bloqueio, o servidor recusa a conexão antes de aceitá-la: o cliente recebe HTTP 403 no handshake.
+- **IP real:** atrás do Caddy, o servidor usa o `X-Forwarded-For`, mas só quando a conexão vem de um proxy confiável (`PEGASUS_PROXIES`, padrão `127.0.0.1,::1`). Ele vale a partir da direita, a entrada acrescentada pelo proxy; o que o cliente escreve à esquerda é ignorado. O IP de um proxy nunca é bloqueado: atrás do Caddy, isso derrubaria todos os tablets.
+- **Registro:** cada conexão recusada vai para o log com o IP, o motivo e o `device_id` (limpo, até 32 caracteres), nunca com o token. Durante um bloqueio, o log registra a primeira recusa e depois uma a cada 100.
+
 ## Sessão e memória
 
 Cada conexão é uma sessão. O servidor guarda uma memória curta da conversa da sessão: os últimos `PEGASUS_MEMORIA_TURNOS` turnos (padrão 6), cada um com a fala do usuário e o que o robô respondeu, e os envia ao LLM a cada turno. Uma resposta interrompida entra na memória só com as frases que chegaram a ser sintetizadas; um turno sem resposta (sem fala reconhecida, erro, `abort` antes da primeira frase) não entra. A memória é zerada quando a conexão cai, numa despedida do modo `palavra` (ver "Conversa") e depois de `PEGASUS_MEMORIA_S` (padrão 180 s; 0 desliga) sem conversa, contados do fim do último turno: quem chegar depois começa do zero.
@@ -307,5 +314,6 @@ A conexão continua aberta, com `ping`/`pong`. Com o vLLM fora, o servidor o ver
 | 4000 | Erro de protocolo (JSON inválido, `hello` ausente ou fora de ordem, versão ou formato de áudio não suportado) |
 | 4001 | Token inválido |
 | 4008 | Tempo esgotado (sem `hello` em 5 s ou sem mensagens por 45 s) |
+| HTTP 403 | IP bloqueado por `hello` inválidos repetidos (a conexão nem chega a abrir) |
 
 Ao perder a conexão, o app mostra `desconectado` e tenta reconectar com espera crescente.

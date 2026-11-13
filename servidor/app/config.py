@@ -64,6 +64,8 @@ class Config:
     # Servidor WebSocket
     api_host: str
     api_porta: int
+    # Proxies confiáveis (o Caddy): só deles vale o X-Forwarded-For
+    proxies: frozenset[str]
     # (nome, token) de cada tablet, de PEGASUS_TABLETS; vazio recusa todos
     tablets: tuple[tuple[str, str], ...] = field(repr=False)
 
@@ -124,6 +126,9 @@ def carregar_config(ambiente: dict[str, str] | None = None) -> Config:
         ativacao=_modo_ativacao(env.get("PEGASUS_ATIVACAO", "toque")),
         api_host=env.get("PEGASUS_HOST", "127.0.0.1"),
         api_porta=int(env.get("PEGASUS_PORTA_API", "8100")),
+        proxies=frozenset(
+            p.strip() for p in env.get("PEGASUS_PROXIES", "127.0.0.1,::1").split(",") if p.strip()
+        ),
         tablets=carregar_tablets(env.get("PEGASUS_TABLETS", "")),
     )
 

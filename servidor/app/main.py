@@ -33,6 +33,7 @@ TEMPO_INATIVO_S = 45
 FECHA_PROTOCOLO = 4000
 FECHA_TOKEN = 4001
 FECHA_TEMPO = 4008
+FECHA_POLITICA = 1008  # IP bloqueado (antes do accept: o cliente recebe HTTP 403)
 
 
 async def preparar_modelos(config: Config) -> int:
@@ -69,6 +70,7 @@ async def lifespan(app: FastAPI):
     app.state.config = config
     app.state.taxa_saida = await preparar_modelos(config)
     log.info("modelos prontos; áudio de saída a %d Hz", app.state.taxa_saida)
+    app.state.bloqueio = seguranca.Bloqueio(config.proxies)
     sessoes: set[Sessao] = set()
     app.state.sessoes = sessoes
     app.state.inicio = time.time()
@@ -148,31 +150,54 @@ async def _receber_json(ws: WebSocket, tempo_s: float) -> dict | None:
     return mensagem
 
 
+async def _recusar(ws: WebSocket, ip: str, codigo: int, motivo: str, hello: dict | None) -> None:
+    """Fecha a conexão com um hello inválido, registra a tentativa (sem o token) e
+    conta a falha para o bloqueio do IP."""
+    detalhe = ""
+    if hello is not None and "device_id" in hello:
+        detalhe = f" (device_id {seguranca.limpar_para_log(hello['device_id'])})"
+    log.warning("conexão recusada de %s: %s%s", ip, motivo, detalhe)
+    bloqueio: seguranca.Bloqueio = ws.app.state.bloqueio
+    if bloqueio.falhou(ip):
+        log.warning("IP %s bloqueado por 15 min: 5 hellos inválidos em 10 min", ip)
+    with contextlib.suppress(Exception):
+        await ws.close(codigo, motivo)
+
+
 @app.websocket("/ws")
 async def conexao(ws: WebSocket) -> None:
-    await ws.accept()
     config: Config = ws.app.state.config
+    direto = ws.client.host if ws.client else None
+    ip = seguranca.ip_real(direto, ws.headers.get("x-forwarded-for"), config.proxies)
+    bloqueio: seguranca.Bloqueio = ws.app.state.bloqueio
+    if bloqueio.bloqueado(ip):
+        n = bloqueio.recusadas(ip)
+        if n == 1 or n % 100 == 0:  # sem inundar o log durante um ataque
+            log.warning("conexão recusada de %s: IP bloqueado (%d recusadas no bloqueio)", ip, n)
+        await ws.close(FECHA_POLITICA)
+        return
+    await ws.accept()
 
+    hello = None
     try:
         hello = await _receber_json(ws, TEMPO_HELLO_S)
     except TimeoutError:
-        await ws.close(FECHA_TEMPO, "hello não recebido")
+        await _recusar(ws, ip, FECHA_TEMPO, "hello não recebido em 5 s", None)
         return
     except ValueError:
-        await ws.close(FECHA_PROTOCOLO, "hello inválido")
+        await _recusar(ws, ip, FECHA_PROTOCOLO, "hello inválido", None)
         return
     if hello is None:
         return
     tablet = _validar_hello(hello, config)
     if isinstance(tablet, tuple):
-        log.warning("conexão recusada: %s", tablet[1])
-        await ws.close(*tablet)
+        await _recusar(ws, ip, *tablet, hello)
         return
 
     # O tablet é quem o token diz; o device_id do hello não identifica ninguém.
     monitor: saude.MonitorLLM = ws.app.state.monitor
     sessao = Sessao(ws, config, tablet, monitor)
-    log.info("sessão %s: tablet %s conectado", sessao.id, sessao.device_id)
+    log.info("sessão %s: tablet %s conectado de %s", sessao.id, sessao.device_id, ip)
     await sessao.enviar_json(
         {
             "type": "hello",
@@ -236,4 +261,11 @@ if __name__ == "__main__":
     import uvicorn
 
     config = carregar_config()
-    uvicorn.run("app.main:app", host=config.api_host, port=config.api_porta, ws="websockets-sansio")
+    # proxy_headers=False: o IP real é decidido aqui (seguranca.ip_real), não pelo uvicorn.
+    uvicorn.run(
+        "app.main:app",
+        host=config.api_host,
+        port=config.api_porta,
+        ws="websockets-sansio",
+        proxy_headers=False,
+    )

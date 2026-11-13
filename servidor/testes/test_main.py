@@ -771,6 +771,61 @@ def test_memoria_zerada_depois_do_prazo_sem_conversa(monkeypatch, pipeline):
     assert [len(h) for h in pipeline["historicos"]] == [0, 1, 0]
 
 
+def _hello_errado(c, headers=None):
+    with c.websocket_connect("/ws", headers=dict(headers or {})) as ws:
+        ws.send_json(_hello(token="token-errado"))
+        with pytest.raises(WebSocketDisconnect) as fechou:
+            ws.receive_json()
+    assert fechou.value.code == 4001
+
+
+def test_ip_bloqueado_depois_de_5_hellos_invalidos(cliente, pipeline, caplog):
+    for _ in range(5):
+        _hello_errado(cliente)
+    with pytest.raises(WebSocketDisconnect):  # recusada antes do accept (HTTP 403)
+        with cliente.websocket_connect("/ws"):
+            pass
+    assert "IP testclient bloqueado por 15 min" in caplog.text
+    assert "conexão recusada de testclient: token inválido" in caplog.text
+    assert "token-errado" not in caplog.text
+
+
+def test_hello_que_nao_chega_conta_como_tentativa(cliente, pipeline, monkeypatch, caplog):
+    monkeypatch.setattr(main, "TEMPO_HELLO_S", 0.05)
+    for _ in range(5):
+        with cliente.websocket_connect("/ws") as ws:
+            with pytest.raises(WebSocketDisconnect) as fechou:
+                ws.receive_json()
+        assert fechou.value.code == 4008
+    with pytest.raises(WebSocketDisconnect):
+        with cliente.websocket_connect("/ws"):
+            pass
+    assert "hello não recebido em 5 s" in caplog.text
+
+
+def test_atras_do_proxy_bloqueia_o_ip_real(monkeypatch, pipeline):
+    monkeypatch.setenv("PEGASUS_PROXIES", "testclient")  # o TestClient faz o papel do Caddy
+    atacante = {"x-forwarded-for": "203.0.113.7"}
+    with TestClient(main.app) as c:
+        for _ in range(5):
+            _hello_errado(c, atacante)
+        with pytest.raises(WebSocketDisconnect):
+            with c.websocket_connect("/ws", headers=atacante):
+                pass
+        # outro tablet, pelo mesmo proxy, continua entrando
+        with c.websocket_connect("/ws", headers={"x-forwarded-for": "198.51.100.1"}) as ws:
+            _conectar(ws)
+
+
+def test_device_id_recusado_vai_limpo_para_o_log(cliente, pipeline, caplog):
+    with cliente.websocket_connect("/ws") as ws:
+        ws.send_json(_hello(token=TOKEN[:-1], device_id="sala\nsessão falsa"))
+        with pytest.raises(WebSocketDisconnect):
+            ws.receive_json()
+    assert "(device_id sala?sess?o?falsa)" in caplog.text
+    assert TOKEN[:-1] not in caplog.text
+
+
 def _registros(pipeline):
     linhas = pipeline["turnos"].read_text().splitlines()
     return [json.loads(linha) for linha in linhas]
