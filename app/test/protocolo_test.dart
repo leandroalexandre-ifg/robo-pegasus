@@ -92,6 +92,10 @@ void main() {
     );
     expect(MensagemServidor.decodificar('{"type":"novidade"}'), isNull);
     expect(
+      MensagemServidor.decodificar('{"type":"conversation","state":"outro"}'),
+      isNull,
+    );
+    expect(
       MensagemServidor.decodificar('{"type":"state","state":"dormindo"}'),
       isNull,
     );
@@ -101,5 +105,23 @@ void main() {
 
   test('JSON que não é objeto é erro de formato', () {
     expect(() => MensagemServidor.decodificar('[1,2]'), throwsFormatException);
+  });
+
+  test('conversation: conversando com prazo e esperando o nome', () {
+    final conversando =
+        MensagemServidor.decodificar(
+              '{"type":"conversation","state":"conversando","timeout_ms":8000}',
+            )
+            as Conversa;
+    expect(conversando.estado, EstadoConversa.conversando);
+    expect(conversando.prazo, const Duration(seconds: 8));
+
+    final esperando =
+        MensagemServidor.decodificar(
+              '{"type":"conversation","state":"esperando_nome"}',
+            )
+            as Conversa;
+    expect(esperando.estado, EstadoConversa.esperandoNome);
+    expect(esperando.prazo, isNull);
   });
 }

@@ -193,7 +193,7 @@ class Robo {
         legenda.value = mensagem;
       case MudaEmocao(emocao: final e):
         emocao.value = e;
-      case HelloServidor() || TtsEnd() || Pong():
+      case HelloServidor() || TtsEnd() || Pong() || Conversa():
         break;
     }
     _atualizar();

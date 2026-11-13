@@ -33,6 +33,11 @@ enum Emocao { neutro, feliz, triste, surpreso, pensativo, bravo }
 /// - [palavra]: escuta contínua; o servidor espera o nome "Pegasus".
 enum Ativacao { toque, palavra }
 
+/// Estado da conversa no modo palavra (mensagem `conversation`).
+/// - [esperandoNome]: só "Pegasus" abre a escuta (também ao conectar).
+/// - [conversando]: a próxima fala vira pergunta sem precisar do nome.
+enum EstadoConversa { esperandoNome, conversando }
+
 String helloTablet({required String token, required String deviceId}) =>
     jsonEncode({
       'type': 'hello',
@@ -101,6 +106,16 @@ sealed class MensagemServidor {
         return null;
       case 'error':
         return Erro('${json['message'] ?? 'Erro no servidor.'}');
+      case 'conversation':
+        final prazo = json['timeout_ms'];
+        return switch (json['state']) {
+          'conversando' => Conversa(
+            EstadoConversa.conversando,
+            prazo: prazo is int ? Duration(milliseconds: prazo) : null,
+          ),
+          'esperando_nome' => const Conversa(EstadoConversa.esperandoNome),
+          _ => null,
+        };
       default:
         return null;
     }
@@ -152,4 +167,13 @@ class Erro extends MensagemServidor {
 class MudaEmocao extends MensagemServidor {
   const MudaEmocao(this.emocao);
   final Emocao emocao;
+}
+
+class Conversa extends MensagemServidor {
+  const Conversa(this.estado, {this.prazo});
+  final EstadoConversa estado;
+
+  /// Prazo sem fala na conversa, contado depois que o tablet termina de
+  /// tocar a resposta. Só em `conversando`.
+  final Duration? prazo;
 }
