@@ -46,8 +46,25 @@ class AnimadorRosto extends ChangeNotifier {
   /// Sinal de "ouvindo à espera do nome", 0 a 1, com entrada e saída suaves.
   double sinalNome = 0;
 
-  /// Liga o sinal de "ouvindo à espera do nome" (modo palavra).
-  bool esperandoNome = false;
+  /// "Despertar" ao ouvir o nome: os olhos se abrem um pouco além do normal
+  /// e voltam, 0 a 1. Marca a passagem de "esperando o nome" para
+  /// "conversando".
+  double despertar = 0;
+  double? _inicioDespertar;
+
+  bool _esperandoNome = false;
+  bool get esperandoNome => _esperandoNome;
+
+  /// Modo palavra, ocioso com o microfone aberto: rosto relaxado e sinal
+  /// discreto. Sem isso, o ocioso é o de sempre.
+  set esperandoNome(bool v) {
+    if (v == _esperandoNome) return;
+    _esperandoNome = v;
+    _alvo = _calcularAlvo();
+  }
+
+  Expressao _calcularAlvo() =>
+      Expressao.para(_estado, _emocao, esperandoNome: _esperandoNome);
 
   EstadoRosto get estado => _estado;
   Emocao get emocao => _emocao;
@@ -56,7 +73,13 @@ class AnimadorRosto extends ChangeNotifier {
     if (e == _estado) return;
     final anterior = _estado;
     _estado = e;
-    _alvo = Expressao.para(_estado, _emocao);
+    _alvo = _calcularAlvo();
+    // Saiu da espera do nome para a conversa: desperta.
+    if (anterior == EstadoRosto.ocioso &&
+        sinalNome > 0.5 &&
+        e != EstadoRosto.desconectado) {
+      _inicioDespertar = tempo;
+    }
     // Uma piscada ao começar a ouvir ou ao acordar parece natural.
     if (e == EstadoRosto.ouvindo || anterior == EstadoRosto.desconectado) {
       _proximaPiscada = tempo + 0.05;
@@ -67,7 +90,7 @@ class AnimadorRosto extends ChangeNotifier {
   set emocao(Emocao e) {
     if (e == _emocao) return;
     _emocao = e;
-    _alvo = Expressao.para(_estado, _emocao);
+    _alvo = _calcularAlvo();
   }
 
   // Piscar.
@@ -87,10 +110,23 @@ class AnimadorRosto extends ChangeNotifier {
     cor = Color.lerp(cor, _estado.cor, _passo(dt, 0.25))!;
     final alvoSinal = esperandoNome && _estado == EstadoRosto.ocioso ? 1 : 0;
     sinalNome += (alvoSinal - sinalNome) * _passo(dt, 0.4);
+    _animarDespertar();
     _animarPiscada();
     _animarOlhar(dt);
     _animarBoca(dt);
     notifyListeners();
+  }
+
+  /// Sobe em 80 ms e desce devagar, em uns 0,4 s.
+  void _animarDespertar() {
+    final inicio = _inicioDespertar;
+    if (inicio == null) return;
+    final t = tempo - inicio;
+    despertar = t < 0.08 ? t / 0.08 : exp(-(t - 0.08) / 0.4);
+    if (despertar < 0.01 && t > 0.08) {
+      despertar = 0;
+      _inicioDespertar = null;
+    }
   }
 
   void _animarPiscada() {
@@ -137,7 +173,8 @@ class AnimadorRosto extends ChangeNotifier {
     final antesX = _alvoOlharX, antesY = _alvoOlharY;
     switch (_estado) {
       case EstadoRosto.ocioso:
-        // Vagueia: às vezes volta ao centro, às vezes olha em volta.
+        // Vagueia: às vezes volta ao centro, às vezes olha em volta. À
+        // espera do nome, mais devagar, como quem está distraído.
         if (_rnd.nextDouble() < 0.35) {
           _alvoOlharX = faixa(0.1);
           _alvoOlharY = faixa(0.08);
@@ -145,9 +182,15 @@ class AnimadorRosto extends ChangeNotifier {
           _alvoOlharX = faixa(0.8);
           _alvoOlharY = faixa(0.5);
         }
-        _proximoOlhar = tempo + 1 + _rnd.nextDouble() * 2.5;
-      case EstadoRosto.ouvindo || EstadoRosto.falando:
-        // Atento: só microssacadas perto do centro.
+        _proximoOlhar =
+            tempo + (_esperandoNome ? 2 : 1) + _rnd.nextDouble() * 2.5;
+      case EstadoRosto.ouvindo:
+        // Atento: olha para quem fala, quase parado.
+        _alvoOlharX = faixa(0.06);
+        _alvoOlharY = faixa(0.04);
+        _proximoOlhar = tempo + 1 + _rnd.nextDouble() * 1.5;
+      case EstadoRosto.falando:
+        // Só microssacadas perto do centro.
         _alvoOlharX = faixa(0.12);
         _alvoOlharY = faixa(0.08);
         _proximoOlhar = tempo + 0.8 + _rnd.nextDouble() * 1.2;

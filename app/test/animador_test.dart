@@ -97,4 +97,26 @@ void main() {
     _rodar(a, 2);
     expect(a.sinalNome, lessThan(0.05));
   });
+
+  test('desperta ao sair da espera do nome, não no ocioso comum', () {
+    final a = AnimadorRosto(aleatorio: Random(5))
+      ..estado = EstadoRosto.ocioso
+      ..esperandoNome = true;
+    _rodar(a, 2);
+    a
+      ..estado = EstadoRosto.ouvindo
+      ..esperandoNome = false;
+    var maximo = 0.0;
+    _rodar(a, 0.3, () => maximo = max(maximo, a.despertar));
+    expect(maximo, greaterThan(0.9));
+    _rodar(a, 2);
+    expect(a.despertar, 0);
+
+    final b = AnimadorRosto(aleatorio: Random(5))..estado = EstadoRosto.ocioso;
+    _rodar(b, 2);
+    b.estado = EstadoRosto.ouvindo; // modo toque
+    maximo = 0;
+    _rodar(b, 0.3, () => maximo = max(maximo, b.despertar));
+    expect(maximo, 0);
+  });
 }

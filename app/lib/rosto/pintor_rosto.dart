@@ -103,7 +103,8 @@ class PintorRosto extends CustomPainter {
   Path _olho(Offset c, double lado, double s) {
     final x = animador.expressao;
     final w = 0.15 * s * x.largura;
-    final h = max(0.23 * s * x.abertura * (1 - animador.piscada), 0.014 * s);
+    final abertura = x.abertura * (1 + 0.18 * animador.despertar);
+    final h = max(0.23 * s * abertura * (1 - animador.piscada), 0.014 * s);
     final caixa = Rect.fromCenter(center: c, width: w, height: h);
     var olho = Path()
       ..addRRect(
