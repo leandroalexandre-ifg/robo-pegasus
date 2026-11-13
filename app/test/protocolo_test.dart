@@ -52,6 +52,12 @@ void main() {
       '{"type":"state","state":"pensando"}',
     );
     expect((estado as Estado).estado, EstadoServidor.pensando);
+    expect(
+      (MensagemServidor.decodificar('{"type":"state","state":"desconectado"}')
+              as Estado)
+          .estado,
+      EstadoServidor.desconectado,
+    );
 
     final stt = MensagemServidor.decodificar('{"type":"stt","text":"Olá"}');
     expect((stt as Stt).texto, 'Olá');

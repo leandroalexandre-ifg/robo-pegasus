@@ -31,7 +31,9 @@ EstadoRosto estadoExibido({
   required bool tocando,
   required EstadoServidor servidor,
 }) {
-  if (!conectado) return EstadoRosto.desconectado;
+  if (!conectado || servidor == EstadoServidor.desconectado) {
+    return EstadoRosto.desconectado;
+  }
   if (microfone) return EstadoRosto.ouvindo;
   if (aguardandoEscuta) return EstadoRosto.pensando;
   if (tocando) return EstadoRosto.falando;
@@ -41,5 +43,6 @@ EstadoRosto estadoExibido({
     EstadoServidor.ouvindo => EstadoRosto.pensando,
     EstadoServidor.pensando => EstadoRosto.pensando,
     EstadoServidor.falando => EstadoRosto.falando,
+    EstadoServidor.desconectado => EstadoRosto.desconectado,
   };
 }

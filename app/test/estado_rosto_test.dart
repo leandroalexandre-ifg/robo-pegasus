@@ -21,6 +21,13 @@ void main() {
     expect(_exibido(conectado: false, tocando: true), EstadoRosto.desconectado);
   });
 
+  test('servidor de linguagem fora do ar é desconectado', () {
+    expect(
+      _exibido(microfone: true, servidor: EstadoServidor.desconectado),
+      EstadoRosto.desconectado,
+    );
+  });
+
   test('microfone ligado é ouvindo, antes da confirmação do servidor', () {
     expect(
       _exibido(

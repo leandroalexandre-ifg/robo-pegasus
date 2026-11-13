@@ -64,6 +64,8 @@ class Robo {
 
   bool get _continuo => _cliente.ativacao == Ativacao.palavra;
 
+  static const _semLinguagem = 'Servidor de linguagem fora do ar';
+
   /// Volume da voz que está tocando (RMS, 0 a 1), para a boca do rosto.
   double nivelVoz() => _reproducao.nivel();
 
@@ -93,6 +95,8 @@ class Robo {
       _cliente.trocarConfig(_config); // tenta de novo agora
       return;
     }
+    // Servidor de linguagem fora do ar: o servidor não escuta.
+    if (_servidor == EstadoServidor.desconectado) return;
     if (_escutando) {
       // No modo contínuo o microfone segue aberto depois do listen_stop.
       if (!_continuo) await _pararMicrofone();
@@ -156,9 +160,21 @@ class Robo {
         _servidor = estado;
         if (estado == EstadoServidor.ouvindo) {
           _aguardandoEscuta = false;
+        } else if (estado == EstadoServidor.desconectado) {
+          // O turno foi interrompido e o robô não escuta até o vLLM voltar.
+          // No modo palavra o microfone segue aberto (o servidor descarta o
+          // áudio) para voltar a ouvir assim que chegar o `ocioso`.
+          _aguardandoEscuta = false;
+          _reproducao.descartar();
+          if (!_continuo && _captura.ativa) unawaited(_pararMicrofone());
+          legenda.value = _semLinguagem;
         } else if (!_continuo && !_aguardandoEscuta && _captura.ativa) {
           // O servidor saiu da escuta (pensando, ou ocioso após abort).
           unawaited(_pararMicrofone());
+        }
+        if (estado != EstadoServidor.desconectado &&
+            legenda.value == _semLinguagem) {
+          legenda.value = null;
         }
       case Stt(:final texto):
         legenda.value = texto.isEmpty ? 'Não entendi' : texto;

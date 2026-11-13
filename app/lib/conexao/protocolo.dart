@@ -20,7 +20,10 @@ const fechaToken = 4001;
 const fechaTempo = 4008;
 
 /// Estados enviados pelo servidor em `state`.
-enum EstadoServidor { ocioso, ouvindo, pensando, falando }
+///
+/// `desconectado` vindo do servidor: a conexão está de pé, mas o servidor de
+/// linguagem (vLLM) está fora do ar e o robô não escuta.
+enum EstadoServidor { ocioso, ouvindo, pensando, falando, desconectado }
 
 /// Emoções enviadas pelo servidor em `emotion`.
 enum Emocao { neutro, feliz, triste, surpreso, pensativo, bravo }
