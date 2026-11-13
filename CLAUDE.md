@@ -163,8 +163,6 @@ Resumo:
 
 ## Fase atual
 
-**Fase 0 concluída:** o vLLM sobe na GPU1 em ~2 min e responde em português pela API em `127.0.0.1:8101`.
+**Fases 0 a 5 concluídas:** servidor completo (VAD, STT, LLM, TTS em fluxo, emoção, memória, palavra de ativação, robustez), app com rosto, ferramentas de internet prontas e publicado em `wss://…/pegasus/ws` pelo Caddy.
 
-**Fase 1 (atual), pipeline no servidor:** áudio → texto → resposta → voz, medindo o tempo de cada etapa.
-
-Próximas fases: 2 app mínimo (primeira conversa completa) · 3 rosto · 4 conversa natural (palavra de ativação, interrupção, persona) · 5 robustez · 6 piloto. Detalhes em `docs/plano.md`.
+**Próxima: Fase 6, piloto.** Detalhes em `docs/plano.md`.
