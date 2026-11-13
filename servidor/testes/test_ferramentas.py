@@ -15,8 +15,8 @@ def _config(**amb):
 def test_citacao():
     c = [Consulta("wikipedia", True, "x", "a Wikipédia", 1)]
     assert ferramentas.citacao(c) == "Segundo a Wikipédia,"
-    c.append(Consulta("clima", True, "x", "o Open-Meteo", 1))
-    assert ferramentas.citacao(c) == "Segundo a Wikipédia e o Open-Meteo,"
+    c.append(Consulta("clima", True, "x", "a previsão do tempo", 1))
+    assert ferramentas.citacao(c) == "Segundo a Wikipédia e a previsão do tempo,"
     assert ferramentas.citacao([Consulta("clima", False, "x", None, 1)]) is None
 
 
@@ -25,12 +25,12 @@ def test_executar_passa_os_argumentos(monkeypatch):
 
     async def falso_clima(cidade, padrao):
         vistos.append((cidade, padrao))
-        return Resultado("{}", "o Open-Meteo")
+        return Resultado("{}", "a previsão do tempo")
 
     monkeypatch.setattr(clima, "clima", falso_clima)
     r = asyncio.run(ferramentas.executar([("clima", '{"cidade": 7}')], _config()))
     assert vistos == [("", "Goiânia")]  # argumento que não é texto vira vazio
-    assert r[0].ok and r[0].fonte == "o Open-Meteo"
+    assert r[0].ok and r[0].fonte == "a previsão do tempo"
 
 
 def test_argumentos_invalidos_viram_vazios(monkeypatch):

@@ -1,6 +1,6 @@
 """Ferramenta clima: tempo atual e previsão de 3 dias, do Open-Meteo (sem chave).
 
-Os dados do Open-Meteo são CC BY 4.0: o robô cita a fonte em voz."""
+Os dados do Open-Meteo são CC BY 4.0 (atribuição em docs/licencas.md)."""
 
 import json
 import math
@@ -9,7 +9,9 @@ from app.ferramentas.rede import Cache, Resultado, obter_json
 
 GEOCODIFICACAO = "https://geocoding-api.open-meteo.com/v1/search"
 PREVISAO = "https://api.open-meteo.com/v1/forecast"
-FONTE = "o Open-Meteo"
+# Dito em voz ("Segundo a previsão do tempo, …"), por escolha do projeto, em vez do
+# nome do serviço; a atribuição do Open-Meteo (CC BY 4.0) fica em docs/licencas.md.
+FONTE = "a previsão do tempo"
 
 DEFINICAO = {
     "type": "function",

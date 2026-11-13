@@ -324,7 +324,7 @@ def test_modo_antes_emocao_e_consulta_na_mesma_rodada(cliente, consultas):
     from app.ferramentas import Espera
 
     respostas, pedidos = cliente
-    consultas[1].append([_consulta("clima", fonte="o Open-Meteo")])
+    consultas[1].append([_consulta("clima", fonte="a previsão do tempo")])
     chamadas = [
         NS(index=0, id="e", function=NS(name="definir_emocao", arguments='{"emocao": "feliz"}')),
         NS(index=1, id="c", function=NS(name="clima", arguments="{}")),
@@ -333,7 +333,7 @@ def test_modo_antes_emocao_e_consulta_na_mesma_rodada(cliente, consultas):
     respostas.append(_Fluxo([_texto(" faz sol.")]))
     itens = _gerar_com(modo="antes")
     assert Espera("clima") in itens and Emocao("feliz") in itens
-    assert [x for x in itens if isinstance(x, str)] == ["Segundo o Open-Meteo,", " faz sol."]
+    assert [x for x in itens if isinstance(x, str)] == ["Segundo a previsão do tempo,", " faz sol."]
     ferramentas = [m for m in pedidos[1]["messages"] if m["role"] == "tool"]
     assert [m["content"] for m in ferramentas] == ["ok", "Verbete X: dados."]
 

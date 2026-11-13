@@ -74,7 +74,7 @@ def test_clima_cidade_padrao_mais_populosa_e_em_palavras(servidor):
     respostas["geocoding-api.open-meteo.com"] = GOIANIA
     respostas["api.open-meteo.com"] = PREVISAO
     r = _rodar(clima.clima(None, "Goiânia"))
-    assert r.fonte == "o Open-Meteo"
+    assert r.fonte == "a previsão do tempo"
     dados = json.loads(r.texto)
     assert dados["cidade"] == "Goiânia, Goiás, Brasil"
     assert dados["agora"]["temperatura"] == "26 graus"
