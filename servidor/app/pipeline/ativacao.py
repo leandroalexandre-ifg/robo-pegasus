@@ -7,9 +7,10 @@ PALAVRA = "pegasus"
 # Grafias que o Whisper costuma produzir para "Pegasus" em português, já sem acento.
 # Além delas, vale qualquer grafia a uma letra de distância (ver `e_ativacao`).
 VARIANTES = frozenset({"pegasus", "pegaso", "pegasos", "pegasso", "pegazus", "pegazo", "pegassus"})
-# Chamamentos aceitos antes da palavra: "Ei, Pegasus", "Oi, Pegasus". "Hey" é como o
-# Whisper às vezes escreve o "Ei".
-CHAMAMENTOS = frozenset({"ei", "oi", "hey"})
+# Chamamentos aceitos antes da palavra: "Ei, Pegasus", "Oi, Pegasus". "Hey" e "E aí"
+# são como o Whisper às vezes escreve o "Ei" (o "E aí" em 5 de 100 falas sintéticas).
+CHAMAMENTOS = frozenset({"ei", "oi", "hey", "eai"})
+_E_AI = re.compile(r"^[\W\d_]*e\s+a[íi](?![^\W\d_])", re.IGNORECASE)
 _TAMANHO_MIN_APROXIMADO = 6  # abaixo disso, uma letra de diferença pega palavras comuns
 
 # Primeira palavra (só letras) e o resto, aceitando pontuação antes dela.
@@ -46,7 +47,9 @@ def pergunta(texto: str) -> str | None:
 
     None: o texto não começa com a palavra (a fala deve ser descartada).
     "": a fala era só a palavra, sem pergunta.
-    A palavra pode vir depois de um chamamento: "Ei, Pegasus", "Oi, Pegasus"."""
+    A palavra pode vir depois de um chamamento: "Ei, Pegasus", "Oi, Pegasus",
+    "E aí, Pegasus"."""
+    texto = _E_AI.sub("eai", texto, count=1)
     m = _PRIMEIRA_PALAVRA.match(texto)
     if m is not None and _normalizar(m[1]) in CHAMAMENTOS:
         m = _PRIMEIRA_PALAVRA.match(m[2])

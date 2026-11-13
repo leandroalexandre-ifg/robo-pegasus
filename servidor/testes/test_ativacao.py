@@ -23,6 +23,9 @@ from app.pipeline.ativacao import e_ativacao, pergunta
         ("Oi, Pégaso. Me ajuda?", "Me ajuda?"),
         ("Hey Pegasus!", ""),
         ("Ei, Pegasus.", ""),
+        ("E aí, Pegasus, qual é a sua cor favorita?", "qual é a sua cor favorita?"),
+        ("E aí Pegasus, como está o tempo?", "como está o tempo?"),
+        ("e ai, pegasus", ""),
     ],
 )
 def test_reconhece_a_palavra_no_comeco(texto, esperado):
@@ -43,6 +46,8 @@ def test_reconhece_a_palavra_no_comeco(texto, esperado):
         "Oi, tudo bem, Pegasus?",  # o chamamento não muda a regra: a palavra vem logo depois
         "Ei, ei, Pegasus",  # só um chamamento antes da palavra
         "Olá, Pegasus",  # fora da lista de chamamentos
+        "E aí, tudo bem?",
+        "E aiPegasus",
     ],
 )
 def test_ignora_falas_sem_a_palavra(texto):
