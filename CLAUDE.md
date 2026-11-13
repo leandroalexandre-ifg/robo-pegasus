@@ -20,10 +20,10 @@ Robô conversacional inspirado no Xiaozhi ESP32: um app Flutter num tablet Andro
 - **Durante o desenvolvimento, o tablet acessa o servidor por um túnel SSH aberto no Mac:**
 
 ```bash
-ssh -N -L 0.0.0.0:8000:localhost:8000 USUARIO@SERVIDOR_NUMBERS
+ssh -N -L 0.0.0.0:8100:localhost:8100 USUARIO@SERVIDOR_NUMBERS
 ```
 
-  O tablet, na mesma rede Wi-Fi do Mac, conecta em `ws://IP_DO_MAC:8000`. O acesso definitivo (porta liberada ou VPN do IFG) será combinado com a TI.
+  O tablet, na mesma rede Wi-Fi do Mac, conecta em `ws://IP_DO_MAC:8100/ws`.
 
 ## Implantação no servidor (Fase 0 concluída)
 
