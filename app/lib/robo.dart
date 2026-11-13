@@ -206,6 +206,14 @@ class Robo {
     _reproducao.tocar(pcm);
   }
 
+  /// O que o rosto mostra como escuta. No modo `palavra`, `ouvindo` do
+  /// servidor já vale assim que a voz do robô acaba de tocar, sem esperar o
+  /// microfone reabrir (senão o rosto piscaria em `pensando`).
+  bool get _escutaNaTela => _continuo
+      ? (_aguardandoEscuta || _servidor == EstadoServidor.ouvindo) &&
+            !_reproducao.tocando.value
+      : _captura.ativa;
+
   /// O usuário está falando para o robô (não só o microfone aberto à espera
   /// do nome).
   bool get _escutando => _continuo
@@ -253,7 +261,7 @@ class Robo {
     _talvezReabrir();
     estado.value = estadoExibido(
       conectado: _cliente.conectado.value,
-      microfone: _escutando,
+      microfone: _escutaNaTela,
       aguardandoEscuta: _aguardandoEscuta,
       tocando: _reproducao.tocando.value,
       servidor: _servidor,
