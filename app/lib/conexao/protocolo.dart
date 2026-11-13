@@ -19,6 +19,9 @@ const fechaProtocolo = 4000;
 const fechaToken = 4001;
 const fechaTempo = 4008;
 
+/// O mesmo tablet (token) abriu outra conexão: não reconectar sozinho.
+const fechaOutroAparelho = 4009;
+
 /// Estados enviados pelo servidor em `state`.
 ///
 /// `desconectado` vindo do servidor: a conexão está de pé, mas o servidor de

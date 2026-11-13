@@ -73,22 +73,30 @@ class Cliente {
   Future<void> _laco() async {
     var espera = _esperaMinima;
     while (!_parado) {
-      final recebeuHello = await _conectarUmaVez();
+      final (:recebeuHello, :codigo) = await _conectarUmaVez();
       if (_parado) break;
+      if (codigo == fechaOutroAparelho || codigo == fechaToken) {
+        // Reconectar sozinho não resolve: com 4009, dois aparelhos com o
+        // mesmo token ficariam se derrubando; com 4001, cada tentativa conta
+        // para o bloqueio de IP do servidor. Só um toque na tela ou uma
+        // configuração nova (trocarConfig) tenta de novo.
+        await _aguardar(null);
+        espera = _esperaMinima;
+        continue;
+      }
       if (recebeuHello) espera = _esperaMinima;
       await _aguardar(espera);
-      espera = Duration(
-        milliseconds: min(
-          espera.inMilliseconds * 2,
-          _esperaMaxima.inMilliseconds,
-        ),
-      );
+      espera = _dobrar(espera, _esperaMaxima);
     }
   }
 
+  static Duration _dobrar(Duration d, Duration maximo) =>
+      Duration(milliseconds: min(d.inMilliseconds * 2, maximo.inMilliseconds));
+
   /// Abre uma conexão e só retorna quando ela fecha. Devolve se o `hello` do
-  /// servidor chegou, para zerar a espera da reconexão.
-  Future<bool> _conectarUmaVez() async {
+  /// servidor chegou (para zerar a espera da reconexão) e o código de
+  /// fechamento, que decide quando tentar de novo.
+  Future<({bool recebeuHello, int? codigo})> _conectarUmaVez() async {
     final fim = Completer<void>();
     var recebeuHello = false;
     final IOWebSocketChannel canal;
@@ -109,7 +117,7 @@ class Cliente {
           ? 'Certificado do servidor não aceito'
           : 'Servidor não encontrado';
       _canal = null;
-      return false;
+      return (recebeuHello: false, codigo: null);
     }
 
     final limite = Timer(_limiteHello, () {
@@ -164,12 +172,13 @@ class Cliente {
       fechaToken => 'Token inválido',
       fechaProtocolo => 'Erro de protocolo',
       fechaTempo => 'Tempo esgotado',
+      fechaOutroAparelho => 'Conectado em outro aparelho',
       _ => 'Conexão perdida',
     };
     debugPrint(
       '[Cliente] conexão fechada (${canal.closeCode} ${canal.closeReason})',
     );
-    return recebeuHello;
+    return (recebeuHello: recebeuHello, codigo: canal.closeCode);
   }
 
   void _iniciarPing() {
@@ -177,10 +186,12 @@ class Cliente {
     _timerPing = Timer.periodic(intervaloPing, (_) => enviarTexto(ping()));
   }
 
-  Future<void> _aguardar(Duration tempo) {
+  /// Espera [tempo], ou até [_acordar] (toque na tela ou configuração
+  /// nova). Com [tempo] nulo, só [_acordar] encerra a espera.
+  Future<void> _aguardar(Duration? tempo) {
     final espera = _espera = Completer<void>();
-    final timer = Timer(tempo, _acordar);
-    return espera.future.whenComplete(timer.cancel);
+    final timer = tempo == null ? null : Timer(tempo, _acordar);
+    return espera.future.whenComplete(() => timer?.cancel());
   }
 
   void _acordar() {
