@@ -1,0 +1,29 @@
+#!/bin/bash
+# Liga o Robô Pegasus: vLLM (pegasus-llm) e API (pegasus-api), no systemd --user.
+# Não habilita nada para iniciar com o sistema.
+# Instalação: ln -s "$PWD/servidor/scripts/pegasus-ligar" ~/.local/bin/pegasus-ligar
+set -u
+GPU=1
+MIB_LLM=26000  # vLLM com --gpu-memory-utilization 0.85
+MIB_API=3000   # Whisper large-v3-turbo em float16
+
+precisa=0
+llm_no_ar=1
+systemctl --user is-active -q pegasus-llm || { llm_no_ar=0; precisa=$((precisa + MIB_LLM)); }
+systemctl --user is-active -q pegasus-api || precisa=$((precisa + MIB_API))
+if [ "$precisa" -eq 0 ]; then
+    echo "vLLM e API já estão no ar."
+    exit 0
+fi
+livre=$(nvidia-smi -i "$GPU" --query-gpu=memory.free --format=csv,noheader,nounits)
+if [ "$livre" -lt "$precisa" ]; then
+    echo "GPU$GPU com só ${livre} MiB livres (precisa de ${precisa} MiB). Nada foi ligado."
+    exit 1
+fi
+systemctl --user start pegasus-llm pegasus-api || exit 1
+if [ "$llm_no_ar" -eq 1 ]; then
+    echo "API subindo (o vLLM já estava no ar)."
+else
+    echo "vLLM e API subindo. O vLLM leva cerca de 2 min; até lá os tablets veem \"desconectado\"."
+fi
+echo "Estado: pegasus-status. Logs: journalctl --user -u pegasus-llm -u pegasus-api -f"

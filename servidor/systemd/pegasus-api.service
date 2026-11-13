@@ -1,0 +1,19 @@
+# Robô Pegasus: API WebSocket (VAD, Whisper na GPU1, Piper; o LLM é o pegasus-llm).
+# Unidade do systemd --user, sem [Install]: não inicia com o sistema.
+# Instalação: cp servidor/systemd/pegasus-api.service ~/.config/systemd/user/
+#             systemctl --user daemon-reload
+# Ligar e desligar junto com o vLLM: pegasus-ligar e pegasus-desligar.
+[Unit]
+Description=Robô Pegasus - API WebSocket
+# Ao ligar os dois juntos, a API sobe depois do vLLM; ao desligar, para antes.
+# Sem o vLLM a API funciona e mostra "desconectado" aos tablets.
+After=pegasus-llm.service
+StartLimitIntervalSec=600
+StartLimitBurst=3
+
+[Service]
+EnvironmentFile=%h/.config/robo-pegasus/pegasus.env
+WorkingDirectory=/data/projects/leandro/robo-pegasus/servidor
+ExecStart=/data/projects/leandro/robo-pegasus/.venv/bin/python -m app.main
+Restart=on-failure
+RestartSec=10
