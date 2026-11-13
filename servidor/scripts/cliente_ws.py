@@ -128,6 +128,12 @@ async def turno(ws, entrada: Path, saida: Path, args, taxa: int) -> int:
             emocoes.append(mensagem["emotion"])
         elif tipo == "error":
             print(f"Erro do servidor: {mensagem['message']}")
+        elif tipo == "conversation" and mensagem["state"] == "conversando":
+            print(
+                f"Conversa aberta: a próxima fala dispensa o nome por {mensagem['timeout_ms']} ms."
+            )
+        elif tipo == "conversation":
+            print("Conversa encerrada: o robô volta a esperar o nome.")
         elif tipo == "state" and mensagem["state"] in ("ocioso", "ouvindo"):
             recebido["fim"] = instante  # ouvindo: o "Oi?" da palavra de ativação
             break
