@@ -103,7 +103,10 @@ _LOCAIS = {"127.0.0.1", "::1", "testclient"}
 async def status(request: Request) -> dict:
     """Estado da API para o pegasus-status. Só para quem está no próprio servidor;
     sem segredos, textos ou nomes de tablets."""
-    if request.client is None or request.client.host not in _LOCAIS:
+    # Atrás do Caddy, todo pedido da internet chega de 127.0.0.1: um pedido com
+    # cabeçalho de proxy não é local.
+    via_proxy = "x-forwarded-for" in request.headers or "forwarded" in request.headers
+    if request.client is None or request.client.host not in _LOCAIS or via_proxy:
         raise HTTPException(status_code=404)
     estado = request.app.state
     monitor: saude.MonitorLLM = estado.monitor

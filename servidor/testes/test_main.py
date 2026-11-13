@@ -863,6 +863,12 @@ def test_limite_de_sessoes_simultaneas(monkeypatch, pipeline):
             assert depois.receive_json()["type"] == "hello"
 
 
+def test_status_recusa_pedido_que_veio_pelo_proxy(cliente):
+    assert cliente.get("/status").status_code == 200
+    assert cliente.get("/status", headers={"x-forwarded-for": "203.0.113.7"}).status_code == 404
+    assert cliente.get("/status", headers={"forwarded": "for=203.0.113.7"}).status_code == 404
+
+
 def _registros(pipeline):
     linhas = pipeline["turnos"].read_text().splitlines()
     return [json.loads(linha) for linha in linhas]
