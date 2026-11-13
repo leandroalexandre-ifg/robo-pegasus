@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 
 import 'config/config.dart';
 import 'config/tela_config.dart';
+import 'conexao/tls.dart';
 import 'demo.dart';
 import 'robo.dart';
 import 'rosto/estado_rosto.dart';
@@ -15,6 +16,7 @@ Future<void> main() async {
     DeviceOrientation.landscapeRight,
   ]);
   await SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
+  await Tls.iniciar(); // CA interna do wss://, antes de qualquer conexão
   if (modoDemo) {
     runApp(const AppPegasus(home: TelaDemo()));
     return;

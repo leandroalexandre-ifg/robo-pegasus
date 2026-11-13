@@ -1,11 +1,14 @@
 import 'dart:async';
+import 'dart:io' show TlsException;
 import 'dart:math';
 
 import 'package:flutter/foundation.dart';
 import 'package:web_socket_channel/io.dart';
+import 'package:web_socket_channel/web_socket_channel.dart';
 
 import '../config/config.dart';
 import 'protocolo.dart';
+import 'tls.dart';
 
 /// Cliente WebSocket do robô: faz o `hello`, mantém o `ping` e reconecta
 /// sozinho com espera crescente quando a conexão cai.
@@ -90,15 +93,21 @@ class Cliente {
     var recebeuHello = false;
     final IOWebSocketChannel canal;
     try {
+      // O customClient leva a CA interna para o wss://; no ws:// do túnel
+      // ele é só um HttpClient comum.
       canal = IOWebSocketChannel.connect(
         Uri.parse(_config.url.trim()),
         connectTimeout: const Duration(seconds: 5),
+        customClient: Tls.novoCliente(),
       );
       _canal = canal;
       await canal.ready;
     } catch (e) {
       debugPrint('[Cliente] falha ao conectar em ${_config.url}: $e');
-      motivo.value = 'Servidor não encontrado';
+      final interna = e is WebSocketChannelException ? e.inner : e;
+      motivo.value = interna is TlsException || e is TlsException
+          ? 'Certificado do servidor não aceito'
+          : 'Servidor não encontrado';
       _canal = null;
       return false;
     }
