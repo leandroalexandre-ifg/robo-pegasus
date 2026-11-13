@@ -3,7 +3,9 @@
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+from app.ferramentas import NOMES as NOMES_FERRAMENTAS
 from app.seguranca import carregar_tablets
 
 RAIZ_REPOSITORIO = Path(__file__).resolve().parents[2]
@@ -40,6 +42,11 @@ class Config:
 
     # Persona (arquivo TOML editável, lido na subida)
     persona_arquivo: Path
+
+    # Ferramentas do LLM (PEGASUS_FERRAMENTAS); vazio: nenhuma
+    ferramentas: tuple[str, ...]
+    fuso: str  # fuso horário do "[agora: …]" e do clima
+    cidade: str  # cidade do clima quando a pessoa não diz qual
 
     # Silero VAD: fim da fala sem listen_stop
     vad_limiar: float
@@ -80,6 +87,23 @@ def _modo_emocao(valor: str) -> str:
     return valor
 
 
+def _ferramentas(valor: str) -> tuple[str, ...]:
+    nomes = tuple(dict.fromkeys(n.strip() for n in valor.split(",") if n.strip()))
+    if desconhecidas := [n for n in nomes if n not in NOMES_FERRAMENTAS]:
+        raise ValueError(
+            f"PEGASUS_FERRAMENTAS: desconhecidas {desconhecidas}; válidas: {NOMES_FERRAMENTAS}"
+        )
+    return nomes
+
+
+def _fuso(valor: str) -> str:
+    try:
+        ZoneInfo(valor)
+    except (ZoneInfoNotFoundError, ValueError):
+        raise ValueError(f"PEGASUS_FUSO: fuso horário desconhecido: {valor!r}") from None
+    return valor
+
+
 MODOS_ATIVACAO = ("toque", "palavra")
 
 
@@ -113,6 +137,9 @@ def carregar_config(ambiente: dict[str, str] | None = None) -> Config:
             env.get("PEGASUS_PIPER_VOZ", str(MODELOS / "piper" / "pt_BR-faber-medium.onnx"))
         ),
         persona_arquivo=Path(env.get("PEGASUS_PERSONA", str(SERVIDOR / "persona.toml"))),
+        ferramentas=_ferramentas(env.get("PEGASUS_FERRAMENTAS", "")),
+        fuso=_fuso(env.get("PEGASUS_FUSO", "America/Sao_Paulo")),
+        cidade=env.get("PEGASUS_CIDADE", "Goiânia").strip() or "Goiânia",
         vad_limiar=float(env.get("PEGASUS_VAD_LIMIAR", "0.5")),
         vad_silencio_s=int(env.get("PEGASUS_VAD_SILENCIO_MS", "600")) / 1000,
         vad_previa_s=int(env.get("PEGASUS_VAD_PREVIA_MS", "300")) / 1000,
@@ -150,6 +177,9 @@ def resumo_publico(config: Config) -> dict[str, object]:
         "api": f"{config.api_host}:{config.api_porta}",
         "voz": config.piper_voz.stem,
         "persona": str(config.persona_arquivo),
+        "ferramentas": list(config.ferramentas) or "nenhuma",
+        "fuso": config.fuso,
+        "cidade": config.cidade,
         "vad_silencio_ms": round(config.vad_silencio_s * 1000),
         "vad_previa_ms": round(config.vad_previa_s * 1000),
         "memoria_turnos": config.memoria_turnos,

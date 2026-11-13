@@ -10,6 +10,7 @@ from openai import AsyncOpenAI
 
 from app import persona
 from app.config import Config
+from app.ferramentas.agora import agora
 from app.pipeline.emocao import FERRAMENTA, Emocao, cortar_marcacoes, emocao_da_chamada
 
 log = logging.getLogger("pegasus.llm")
@@ -41,6 +42,27 @@ async def _preparar(config: Config) -> tuple[AsyncOpenAI, str]:
 
 
 Historico = Sequence[tuple[str, str]]  # (fala do usuário, resposta do robô), do mais antigo
+
+PROMPT_AGORA = (
+    "A mensagem do usuário começa com a data e a hora atuais entre colchetes, como "
+    "[agora: …]. Use-as só quando a pergunta precisar delas e não fale da data nem da hora "
+    "sem que perguntem."
+)
+
+
+def _sistema(config: Config) -> str:
+    sistema = persona.prompt_sistema(config)
+    if "data_hora" in config.ferramentas:
+        sistema += f"\n{PROMPT_AGORA}"
+    return sistema
+
+
+def _fala_atual(texto_usuario: str, config: Config) -> str:
+    """A fala do usuário, com a data e a hora na frente se data_hora estiver ligada.
+    Só a fala atual: o histórico vai sem elas, e o começo do prompt não muda."""
+    if "data_hora" not in config.ferramentas:
+        return texto_usuario
+    return f"[agora: {agora(config.fuso)}]\n{texto_usuario}"
 
 
 def _mensagens(texto_usuario: str, sistema: str, historico: Historico = ()) -> list[dict]:
@@ -137,15 +159,15 @@ async def gerar(
             _fluxo(
                 cliente,
                 modelo,
-                _mensagens(texto_usuario, persona.prompt_sistema(config), historico),
+                _mensagens(_fala_atual(texto_usuario, config), _sistema(config), historico),
                 config,
             )
         ):
             yield pedaco
         return
 
-    sistema = f"{persona.prompt_sistema(config)}\n{persona.PROMPT_EMOCAO}"
-    mensagens = _mensagens(texto_usuario, sistema, historico)
+    sistema = f"{_sistema(config)}\n{persona.PROMPT_EMOCAO}"
+    mensagens = _mensagens(_fala_atual(texto_usuario, config), sistema, historico)
     chamadas: dict[int, dict] = {}
     falou = False
     async for pedaco in _texto_limpo(_fluxo(cliente, modelo, mensagens, config, chamadas)):
@@ -174,7 +196,7 @@ async def escolher_emocao(
     cliente, modelo = await _preparar(config)
     resposta = await cliente.chat.completions.create(
         model=modelo,
-        messages=_mensagens(texto_usuario, persona.prompt_sistema(config), historico),
+        messages=_mensagens(_fala_atual(texto_usuario, config), _sistema(config), historico),
         tools=[FERRAMENTA],
         tool_choice={"type": "function", "function": {"name": FERRAMENTA["function"]["name"]}},
         # O Qwen3.8 escreve a chamada no formato XML: ~32 tokens.
