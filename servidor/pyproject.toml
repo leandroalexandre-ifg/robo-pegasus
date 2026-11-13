@@ -12,6 +12,8 @@ dependencies = [
     "nvidia-cublas-cu12==12.9.3.13",
     "piper-tts==1.8.0",
     "openai>=1.0",
+    # Ferramentas do LLM (já vinha com o openai; agora usado direto).
+    "httpx>=0.28",
     "numpy>=2",
 ]
 
