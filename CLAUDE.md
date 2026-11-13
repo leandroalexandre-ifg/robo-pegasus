@@ -24,6 +24,7 @@ ssh -N -L 0.0.0.0:8100:localhost:8100 USUARIO@SERVIDOR_NUMBERS
 ```
 
   O tablet, na mesma rede Wi-Fi do Mac, conecta em `ws://IP_DO_MAC:8100/ws`.
+- **Acesso publicado:** o Pegasus está em `wss://…/pegasus/ws`, pelo Caddy do SciTech Ear (`tls internal`; rota adicionada no commit `7115a75` do repositório do SciTech Ear), que encaminha para a API (porta 8100). O app confia na CA interna do Caddy (asset embutido). A configuração do Caddy pertence ao SciTech Ear: não alterar daqui.
 
 ## Implantação no servidor (Fase 0 concluída)
 
