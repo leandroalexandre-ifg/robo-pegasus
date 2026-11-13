@@ -57,6 +57,11 @@ class Robo {
   /// espera do nome. O rosto mostra um sinal discreto.
   final esperandoNome = ValueNotifier<bool>(false);
 
+  /// Modo `palavra`: janela de conversa aberta (`conversation
+  /// "conversando"`): a próxima fala vira pergunta sem o nome, e o rosto
+  /// fica atento. Ao conectar, e depois de `esperando_nome`, é falso.
+  bool _conversando = false;
+
   /// Texto discreto no rodapé: o que foi entendido, erro ou motivo da queda.
   final legenda = ValueNotifier<String?>(null);
 
@@ -147,6 +152,7 @@ class Robo {
       _servidor = EstadoServidor.ocioso;
       _aguardandoEscuta = false;
       _vozDoRobo = false;
+      _conversando = false;
       _timerReabrir?.cancel();
       _reproducao.descartar();
       await _captura.parar();
@@ -193,7 +199,13 @@ class Robo {
         legenda.value = mensagem;
       case MudaEmocao(emocao: final e):
         emocao.value = e;
-      case HelloServidor() || TtsEnd() || Pong() || Conversa():
+      case Conversa(estado: final c, :final prazo):
+        _conversando = c == EstadoConversa.conversando;
+        debugPrint(
+          '[Robo] conversa: ${c.name}'
+          '${prazo == null ? '' : ' (${prazo.inMilliseconds} ms)'}',
+        );
+      case HelloServidor() || TtsEnd() || Pong():
         break;
     }
     _atualizar();
@@ -267,7 +279,10 @@ class Robo {
       servidor: _servidor,
     );
     esperandoNome.value =
-        _continuo && estado.value == EstadoRosto.ocioso && _captura.ativa;
+        _continuo &&
+        !_conversando &&
+        estado.value == EstadoRosto.ocioso &&
+        _captura.ativa;
     if (!_cliente.conectado.value && _cliente.motivo.value != null) {
       legenda.value = _cliente.motivo.value;
     }
