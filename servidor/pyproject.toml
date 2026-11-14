@@ -8,6 +8,9 @@ requires-python = ">=3.12"
 # O vLLM e o torch já estão no mesmo venv (Fase 0).
 dependencies = [
     "faster-whisper==1.2.1",
+    # O av 19 removeu o argumento metadata_errors de av.open(), que o decode_audio do
+    # faster-whisper 1.2.1 usa: transcrever um arquivo de áudio dá TypeError.
+    "av>=18,<19",
     # O ctranslate2 4.9.0 carrega libcublas.so.12; o venv só tem o cuBLAS 13.
     "nvidia-cublas-cu12==12.9.3.13",
     "piper-tts==1.8.0",
