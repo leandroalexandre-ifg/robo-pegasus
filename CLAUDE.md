@@ -124,6 +124,13 @@ Regras do servidor:
 
 ## App (`app/`)
 
+**Estado: pronto (Fases 3 a 5).** Não tratar como pendência:
+
+- Rosto animado completo em `app/lib/rosto/` (estados, emoções, boca pelo RMS, piscar).
+- Modo palavra: escuta contínua em ocioso com meio-duplex, sinal discreto de "à espera do nome", rosto desperta ao ouvir o nome (commits `7c7b19e`, `9cb9343`, `2e87528`).
+- Mensagem `conversation` tratada (`conexao/protocolo.dart`, `robo.dart`): conversando com `timeout_ms` e esperando o nome mantêm o rosto atento (`c6b8617`, `715d20e`).
+- wss:// com a CA interna do Caddy embutida; fechamentos 4009 e 4001 não reconectam sozinhos, 4013 espera mais (`3b1831e`, `ee5f61e`, `a46ec36`).
+
 Pacotes previstos: `web_socket_channel`, `record`, `flutter_pcm_sound` (ou `flutter_sound`), `audio_session`, `rive`, `flutter_riverpod`, `wakelock_plus`, `permission_handler`. Confirme a versão atual de cada um antes de adicionar.
 
 ```bash
