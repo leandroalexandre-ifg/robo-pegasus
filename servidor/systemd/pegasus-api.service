@@ -12,6 +12,10 @@ StartLimitIntervalSec=600
 StartLimitBurst=3
 
 [Service]
+# O Whisper carrega do cache em modelos/hub, sem consultar o Hugging Face na subida
+# (o repositório do large-v3-turbo redireciona para outro domínio). Para baixar um
+# modelo novo, rode o download à mão, fora do serviço.
+Environment=HF_HUB_OFFLINE=1
 EnvironmentFile=%h/.config/robo-pegasus/pegasus.env
 WorkingDirectory=/data/projects/leandro/robo-pegasus/servidor
 ExecStart=/data/projects/leandro/robo-pegasus/.venv/bin/python -m app.main
